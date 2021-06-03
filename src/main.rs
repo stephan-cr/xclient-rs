@@ -1,8 +1,9 @@
+#![warn(rust_2018_idioms)]
 #![allow(unused_variables)]
 
 use ascii::AsciiString;
 use bytes::{Buf, BufMut, BytesMut};
-use enumflags2::BitFlags;
+use enumflags2::{bitflags, BitFlags};
 use std::io;
 use std::time::Duration;
 use std::vec::Vec;
@@ -43,7 +44,8 @@ enum Class {
     DirectColor,
 }
 
-#[derive(BitFlags, Copy, Clone, Debug)]
+#[bitflags]
+#[derive(Copy, Clone, Debug)]
 #[repr(u32)]
 pub enum Event {
     KeyPress = 0x00000001,
