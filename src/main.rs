@@ -166,7 +166,7 @@ async fn main() -> io::Result<()> {
     connection_req.put_u16_le(0); // length of authorization-protocol-name
     connection_req.put_u16_le(0); // length of authorization-protocol-data
     connection_req.put_u16_le(0);
-    stream.write_all(connection_req.bytes()).await?;
+    stream.write_all_buf(&mut connection_req).await?;
     eprintln!("write");
 
     // let mut connection_repl = BytesMut::with_capacity(12);
@@ -329,7 +329,7 @@ async fn main() -> io::Result<()> {
 
     let mut request_buf = BytesMut::new();
     let window_id = create_window_request(&mut request_buf);
-    stream.write_all(request_buf.bytes()).await?;
+    stream.write_all_buf(&mut request_buf).await?;
 
     let n = stream.read(&mut buf).await?;
     eprintln!("{} - {:?}", n, &buf[..n]);
