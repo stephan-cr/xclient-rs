@@ -8,7 +8,7 @@ use std::time::Duration;
 use std::vec::Vec;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-use tokio::time::delay_for;
+use tokio::time::sleep;
 
 #[repr(u8)]
 enum Opcodes {
@@ -335,7 +335,7 @@ async fn main() -> io::Result<()> {
     let mut request_buf = BytesMut::new();
     map_window_request(&mut request_buf, window_id);
 
-    delay_for(Duration::from_secs(10)).await;
+    sleep(Duration::from_secs(10)).await;
 
     Ok(())
 }
