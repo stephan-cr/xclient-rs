@@ -4,6 +4,7 @@
 use ascii::AsciiString;
 use bytes::{Buf, BufMut, BytesMut};
 use enumflags2::{bitflags, BitFlags};
+use num_traits::FromPrimitive;
 use std::io;
 use std::time::Duration;
 use std::vec::Vec;
@@ -44,6 +45,28 @@ enum Class {
     DirectColor,
 }
 
+#[derive(Debug, num_derive::FromPrimitive)]
+#[repr(u8)]
+enum ErrorCode {
+    Request = 1,
+    Value = 2,
+    Window = 3,
+    Pixmap = 4,
+    Atom = 5,
+    Cursor = 6,
+    Font = 7,
+    Match = 8,
+    Drawable = 9,
+    Access = 10,
+    Alloc = 11,
+    Colormap = 12,
+    GContext = 13,
+    IDChoice = 14,
+    Name = 15,
+    Length = 16,
+    Implementation = 17,
+}
+
 #[bitflags]
 #[derive(Copy, Clone, Debug)]
 #[repr(u32)]
@@ -80,10 +103,19 @@ type ColorMap = u32;
 type VisualId = u32;
 
 #[derive(Debug)]
+struct Error {}
+
+#[derive(Debug)]
 struct Format {
     depth: u8,
     bits_per_pixel: u8,
     scanline_pad: u8,
+}
+
+#[derive(Debug)]
+struct Connection {
+    resource_id_base: u32,
+    resource_id_mask: u32,
 }
 
 #[derive(Debug)]
@@ -125,33 +157,33 @@ struct VisualType {
     blue_mask: u32,
 }
 
-fn create_window_request(buf: &mut BytesMut) -> WindowId {
+fn create_window_request(buf: &mut BytesMut, connection: &Connection, screen: &Screen) -> WindowId {
     buf.put_u8(Opcodes::CreateWindow as u8); // opcode
     buf.put_u8(0); // depth, 0 means copy from parent
     buf.put_u16_le(8 /* + values.len() */); // request len
-    buf.put_u32_le(0); // wid
-    buf.put_u32_le(0); // parent
-    buf.put_i16_le(100); // x
-    buf.put_i16_le(100); // y
-    buf.put_u16_le(0); // width
-    buf.put_u16_le(0); // height
-    buf.put_u16_le(1); // border-width
-    buf.put_u16_le(1); // class InputOutput
-    buf.put_u32_le(33); // visual id
+    buf.put_u32_le(connection.resource_id_base); // wid
+    buf.put_u32_le(38); // parent
+    buf.put_i16_le(200); // x
+    buf.put_i16_le(200); // y
+    buf.put_u16_le(100); // width
+    buf.put_u16_le(100); // height
+    buf.put_u16_le(5); // border-width
+    buf.put_u16_le(0); // class InputOutput
+    buf.put_u32_le(screen.root_visual); // visual id
     buf.put_u32_le(0); // bitmask
 
-    0u32
+    connection.resource_id_base
 }
 
 // pad(E) = (4 - (E mod 4)) mod 4
-fn pad(len: usize) -> usize {
+const fn pad(len: usize) -> usize {
     (4 - (len % 4)) % 4
 }
 
 fn map_window_request(buf: &mut BytesMut, window_id: WindowId) {
     buf.put_u8(Opcodes::MapWindow as u8); // opcode
     buf.put_u8(0); // padding
-    buf.put_u16_le(0); // request length
+    buf.put_u16_le(2); // request length
     buf.put_u32_le(window_id);
 }
 
@@ -167,7 +199,6 @@ async fn main() -> io::Result<()> {
     connection_req.put_u16_le(0); // length of authorization-protocol-data
     connection_req.put_u16_le(0);
     stream.write_all_buf(&mut connection_req).await?;
-    eprintln!("write");
 
     // let mut connection_repl = BytesMut::with_capacity(12);
     // let n = stream.read(&mut connection_repl).await?;
@@ -201,6 +232,10 @@ async fn main() -> io::Result<()> {
     let release_number = response.get_u32_le();
     let resource_id_base = response.get_u32_le();
     let resource_id_mask = response.get_u32_le();
+    let connection = Connection {
+        resource_id_base,
+        resource_id_mask,
+    };
     let motion_buffer_size = response.get_u32_le();
     let vendor_len = response.get_u16_le() as usize;
     let maximum_request_length = response.get_u16_le();
@@ -319,7 +354,8 @@ async fn main() -> io::Result<()> {
         }
     }
 
-    eprintln!("{:?}", screen_roots.first().unwrap());
+    let screen = screen_roots.first().unwrap();
+    eprintln!("{:?}", screen);
     eprintln!(
         "remaining from response: {} {} {}",
         response.remaining(),
@@ -328,14 +364,61 @@ async fn main() -> io::Result<()> {
     );
 
     let mut request_buf = BytesMut::new();
-    let window_id = create_window_request(&mut request_buf);
+    let window_id = create_window_request(&mut request_buf, &connection, &screen);
     stream.write_all_buf(&mut request_buf).await?;
 
-    let n = stream.read(&mut buf).await?;
-    eprintln!("{} - {:?}", n, &buf[..n]);
+    // Every reply contains a 32-bit length field expressed in units
+    // of four bytes. Every reply consists of 32 bytes followed by
+    // zero or more additional bytes of data, as specified in the
+    // length field. Unused bytes within a reply are not guaranteed to
+    // be zero. Every reply also contains the least significant 16
+    // bits of the sequence number of the corresponding request.
+    let mut response_buf = BytesMut::new();
+    let n = stream.read_buf(&mut response_buf).await?;
+    if !response_buf.is_empty() && response_buf.get_u8() == 0
+    /* Error */
+    {
+        let error_code = ErrorCode::from_u8(response_buf.get_u8()).expect("valid error code");
+        eprintln!("create window code field: {:?}", error_code);
+        eprintln!("sequence number: {}", response_buf.get_u16_le());
+        match error_code {
+            ErrorCode::IDChoice | ErrorCode::Window => {
+                eprintln!("bad resource id: {}", response_buf.get_u32_le());
+                eprintln!("minor opcode: {}", response_buf.get_u16_le());
+                eprintln!("major opcode: {}", response_buf.get_u8());
+            }
+            ErrorCode::Match => {
+                response_buf.advance(4); // unused
+                eprintln!("minor opcode: {}", response_buf.get_u16_le());
+                eprintln!("major opcode: {}", response_buf.get_u8());
+            }
+            _ => (),
+        }
+        response_buf.advance(21); // 21 unused bytes
+    }
 
     let mut request_buf = BytesMut::new();
     map_window_request(&mut request_buf, window_id);
+    stream.write_all_buf(&mut request_buf).await?;
+
+    let mut response_buf = BytesMut::new();
+    let n = stream.read_buf(&mut response_buf).await?;
+    if !response_buf.is_empty() && response_buf.get_u8() == 0
+    /* Error */
+    {
+        let error_code = ErrorCode::from_u8(response_buf.get_u8()).expect("valid error code");
+        eprintln!("map window code field: {:?}", error_code);
+        match error_code {
+            ErrorCode::IDChoice | ErrorCode::Window => {
+                eprintln!("sequence number: {}", response_buf.get_u16_le());
+                eprintln!("resource id: {}", response_buf.get_u32_le());
+                eprintln!("minor opcode: {}", response_buf.get_u16_le());
+                eprintln!("major opcode: {}", response_buf.get_u8());
+                response_buf.advance(21);
+            }
+            _ => (),
+        }
+    }
 
     sleep(Duration::from_secs(10)).await;
 
