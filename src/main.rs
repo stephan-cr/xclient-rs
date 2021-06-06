@@ -13,6 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::time::sleep;
 
+#[derive(Debug, num_derive::FromPrimitive)]
 #[repr(u8)]
 enum Opcodes {
     CreateWindow = 1,
@@ -423,74 +424,61 @@ async fn main() -> io::Result<()> {
         n
     );
 
+    let (mut read_stream, write_stream) = stream.into_split();
+
+    let mut stream = write_stream;
+    tokio::spawn(async move {
+        loop {
+            // Every reply contains a 32-bit length field expressed in units
+            // of four bytes. Every reply consists of 32 bytes followed by
+            // zero or more additional bytes of data, as specified in the
+            // length field. Unused bytes within a reply are not guaranteed to
+            // be zero. Every reply also contains the least significant 16
+            // bits of the sequence number of the corresponding request.
+            let mut response_buf = BytesMut::new();
+            eprintln!("reading create window response ...");
+            let n = read_stream.read_buf(&mut response_buf).await;
+            eprintln!("create window response: {:?}", response_buf);
+            if response_buf.remaining() >= 32 {
+                decode_event(&mut response_buf);
+                decode_event(&mut response_buf);
+            }
+            if !response_buf.is_empty() && response_buf.get_u8() == 0
+            /* Error */
+            {
+                let error_code =
+                    ErrorCode::from_u8(response_buf.get_u8()).expect("valid error code");
+                eprintln!("create window code field: {:?}", error_code);
+                eprintln!("sequence number: {}", response_buf.get_u16_le());
+                match error_code {
+                    ErrorCode::IDChoice | ErrorCode::Window => {
+                        eprintln!("bad resource id: {}", response_buf.get_u32_le());
+                    }
+                    ErrorCode::Match => {
+                        response_buf.advance(4); // unused
+                    }
+                    _ => (),
+                }
+                eprintln!("minor opcode: {}", response_buf.get_u16_le());
+                let major_opcode = response_buf.get_u8();
+                eprintln!(
+                    "major opcode: {} {:?}",
+                    major_opcode,
+                    Opcodes::from_u8(major_opcode)
+                );
+                response_buf.advance(21); // 21 unused bytes
+            }
+        }
+    });
+
     let mut request_buf = BytesMut::new();
     let window_id = create_window_request(&mut request_buf, &connection, &screen);
     stream.write_all_buf(&mut request_buf).await?;
-
-    todo!("split stream and read error and events in another coroutine");
-
-    // Every reply contains a 32-bit length field expressed in units
-    // of four bytes. Every reply consists of 32 bytes followed by
-    // zero or more additional bytes of data, as specified in the
-    // length field. Unused bytes within a reply are not guaranteed to
-    // be zero. Every reply also contains the least significant 16
-    // bits of the sequence number of the corresponding request.
-    let mut response_buf = BytesMut::new();
-    eprintln!("reading create window response ...");
-    let n = stream.read_buf(&mut response_buf).await?;
-    eprintln!("create window response: {:?}", response_buf);
-    if response_buf.remaining() >= 32 {
-        decode_event(&mut response_buf);
-        decode_event(&mut response_buf);
-    }
-    if !response_buf.is_empty() && response_buf.get_u8() == 0
-    /* Error */
-    {
-        let error_code = ErrorCode::from_u8(response_buf.get_u8()).expect("valid error code");
-        eprintln!("create window code field: {:?}", error_code);
-        eprintln!("sequence number: {}", response_buf.get_u16_le());
-        match error_code {
-            ErrorCode::IDChoice | ErrorCode::Window => {
-                eprintln!("bad resource id: {}", response_buf.get_u32_le());
-                eprintln!("minor opcode: {}", response_buf.get_u16_le());
-                eprintln!("major opcode: {}", response_buf.get_u8());
-            }
-            ErrorCode::Match => {
-                response_buf.advance(4); // unused
-                eprintln!("minor opcode: {}", response_buf.get_u16_le());
-                eprintln!("major opcode: {}", response_buf.get_u8());
-            }
-            _ => (),
-        }
-        response_buf.advance(21); // 21 unused bytes
-    }
 
     let mut request_buf = BytesMut::new();
     map_window_request(&mut request_buf, window_id);
     stream.write_all_buf(&mut request_buf).await?;
     eprintln!("read map window return value");
-    // stream.flush().await?;
-
-    let mut response_buf = BytesMut::new();
-    eprintln!("reading map window response ...");
-    let n = stream.read_buf(&mut response_buf).await?;
-    eprintln!("map window response: {:?}", response_buf);
-    if !response_buf.is_empty() && response_buf.get_u8() == 0
-    /* Error */
-    {
-        let error_code = ErrorCode::from_u8(response_buf.get_u8()).expect("valid error code");
-        eprintln!("map window code field: {:?}", error_code);
-        match error_code {
-            ErrorCode::IDChoice | ErrorCode::Window => {
-                eprintln!("sequence number: {}", response_buf.get_u16_le());
-                eprintln!("resource id: {}", response_buf.get_u32_le());
-                eprintln!("minor opcode: {}", response_buf.get_u16_le());
-                eprintln!("major opcode: {}", response_buf.get_u8());
-                response_buf.advance(21);
-            }
-            _ => (),
-        }
-    }
 
     sleep(Duration::from_secs(10)).await;
 
