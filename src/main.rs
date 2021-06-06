@@ -3,6 +3,7 @@
 
 use ascii::AsciiString;
 use bytes::{Buf, BufMut, BytesMut};
+use colored::Colorize;
 use enumflags2::{bitflags, BitFlags};
 use num_traits::FromPrimitive;
 use std::io;
@@ -15,7 +16,9 @@ use tokio::time::sleep;
 #[repr(u8)]
 enum Opcodes {
     CreateWindow = 1,
+    DestroyWindow = 2,
     MapWindow = 8,
+    UnmapWindow = 10,
 }
 
 enum ImageByteOrder {
@@ -98,6 +101,36 @@ pub enum Event {
     OwnerGrabButton = 0x01000000,
 }
 
+#[derive(Debug, num_derive::FromPrimitive)]
+#[repr(u8)]
+enum Events {
+    KeyPress = 2,
+    KeyRelease = 3,
+    ButtonPress = 4,
+    ButtonRelease = 5,
+    MotionNotify = 6,
+    EnterNotify = 7,
+    LeaveNotify = 8,
+    FocusIn = 9,
+    FocusOut = 10,
+    KeymapNotify = 11,
+    Expose = 12,
+    GraphicsExposure = 13,
+    NoExposure = 14,
+    VisibilityNotify = 15,
+    CreateNotify = 16,
+    DestroyNotify = 17,
+    UnmapNotify = 18,
+    MapNotify = 19,
+    MapRequest = 20,
+    // ...
+    SelectionRequest = 30,
+    SelectionNotify = 31,
+    ColormapNotify = 32,
+    ClientMessage = 33,
+    MappingNotify = 34,
+}
+
 type WindowId = u32;
 type ColorMap = u32;
 type VisualId = u32;
@@ -161,7 +194,7 @@ fn create_window_request(buf: &mut BytesMut, connection: &Connection, screen: &S
     buf.put_u8(Opcodes::CreateWindow as u8); // opcode
     buf.put_u8(0); // depth, 0 means copy from parent
     buf.put_u16_le(8 /* + values.len() */); // request len
-    buf.put_u32_le(connection.resource_id_base); // wid
+    buf.put_u32_le(connection.resource_id_base + 1); // wid
     buf.put_u32_le(38); // parent
     buf.put_i16_le(200); // x
     buf.put_i16_le(200); // y
@@ -172,7 +205,7 @@ fn create_window_request(buf: &mut BytesMut, connection: &Connection, screen: &S
     buf.put_u32_le(screen.root_visual); // visual id
     buf.put_u32_le(0); // bitmask
 
-    connection.resource_id_base
+    connection.resource_id_base + 1
 }
 
 // pad(E) = (4 - (E mod 4)) mod 4
@@ -187,7 +220,34 @@ fn map_window_request(buf: &mut BytesMut, window_id: WindowId) {
     buf.put_u32_le(window_id);
 }
 
-#[tokio::main]
+fn decode_event(buf: &mut impl Buf) {
+    if buf.remaining() < 32 {
+        return;
+    }
+
+    let first_byte = buf.get_u8();
+    if let Some(event) = Events::from_u8(first_byte) {
+        match event {
+            Events::MappingNotify => {
+                buf.advance(1); // unused
+                let sequence_number = buf.get_u16_le();
+                let request = buf.get_u8();
+                let key_code = buf.get_u8();
+                let count = buf.get_u8();
+                eprintln!(
+                    "sequence_number: {}, request: {}, key_code: {}, count: {}",
+                    sequence_number, request, key_code, count
+                );
+                buf.advance(25); // unused
+            }
+            _ => panic!("unable to decode event yet: {}", first_byte),
+        }
+    } else {
+        panic!("unknown event {}", first_byte);
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> io::Result<()> {
     let mut stream = UnixStream::connect("/tmp/.X11-unix/X1").await?; // Xnest server
     let mut connection_req = BytesMut::with_capacity(12);
@@ -211,7 +271,7 @@ async fn main() -> io::Result<()> {
     let status_code = response.get_u8();
     match status_code {
         0 => panic!("failed"),
-        1 => eprintln!("success"),
+        1 => eprintln!("{}", "success".green()),
         2 => eprintln!("authenticate"),
         x => panic!("unknown response status code: {}", x),
     }
@@ -367,6 +427,8 @@ async fn main() -> io::Result<()> {
     let window_id = create_window_request(&mut request_buf, &connection, &screen);
     stream.write_all_buf(&mut request_buf).await?;
 
+    todo!("split stream and read error and events in another coroutine");
+
     // Every reply contains a 32-bit length field expressed in units
     // of four bytes. Every reply consists of 32 bytes followed by
     // zero or more additional bytes of data, as specified in the
@@ -374,7 +436,13 @@ async fn main() -> io::Result<()> {
     // be zero. Every reply also contains the least significant 16
     // bits of the sequence number of the corresponding request.
     let mut response_buf = BytesMut::new();
+    eprintln!("reading create window response ...");
     let n = stream.read_buf(&mut response_buf).await?;
+    eprintln!("create window response: {:?}", response_buf);
+    if response_buf.remaining() >= 32 {
+        decode_event(&mut response_buf);
+        decode_event(&mut response_buf);
+    }
     if !response_buf.is_empty() && response_buf.get_u8() == 0
     /* Error */
     {
@@ -400,9 +468,13 @@ async fn main() -> io::Result<()> {
     let mut request_buf = BytesMut::new();
     map_window_request(&mut request_buf, window_id);
     stream.write_all_buf(&mut request_buf).await?;
+    eprintln!("read map window return value");
+    // stream.flush().await?;
 
     let mut response_buf = BytesMut::new();
+    eprintln!("reading map window response ...");
     let n = stream.read_buf(&mut response_buf).await?;
+    eprintln!("map window response: {:?}", response_buf);
     if !response_buf.is_empty() && response_buf.get_u8() == 0
     /* Error */
     {
