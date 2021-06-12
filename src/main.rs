@@ -11,15 +11,21 @@ use std::time::Duration;
 use std::vec::Vec;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 
 #[derive(Debug, num_derive::FromPrimitive)]
 #[repr(u8)]
 enum Opcodes {
     CreateWindow = 1,
-    DestroyWindow = 2,
+    ChangeWindowAttributes = 2,
+    GetWindowAttributes = 3,
+    DestroyWindow = 4,
     MapWindow = 8,
     UnmapWindow = 10,
+    CreateGC = 55,
+    ChangeGC = 56,
+    CopyGC = 57,
 }
 
 enum ImageByteOrder {
@@ -209,6 +215,20 @@ fn create_window_request(buf: &mut BytesMut, connection: &Connection, screen: &S
     connection.resource_id_base + 1
 }
 
+fn destroy_window_request(buf: &mut BytesMut, wid: WindowId) {
+    buf.put_u8(Opcodes::DestroyWindow as u8); // opcode
+    buf.put_u8(0); // padding
+    buf.put_u16_le(2); // request length
+    buf.put_u32_le(wid); // wid
+}
+
+fn get_window_attributes_request(buf: &mut BytesMut, wid: WindowId) {
+    buf.put_u8(Opcodes::GetWindowAttributes as u8); // opcode
+    buf.put_u8(0); // padding
+    buf.put_u16_le(2); // request length
+    buf.put_u32_le(wid); // wid
+}
+
 // pad(E) = (4 - (E mod 4)) mod 4
 const fn pad(len: usize) -> usize {
     (4 - (len % 4)) % 4
@@ -221,30 +241,32 @@ fn map_window_request(buf: &mut BytesMut, window_id: WindowId) {
     buf.put_u32_le(window_id);
 }
 
-fn decode_event(buf: &mut impl Buf) {
-    if buf.remaining() < 32 {
+fn unmap_window_request(buf: &mut BytesMut, window_id: WindowId) {
+    buf.put_u8(Opcodes::UnmapWindow as u8); // opcode
+    buf.put_u8(0); // padding
+    buf.put_u16_le(2); // request length
+    buf.put_u32_le(window_id);
+}
+
+fn decode_event(event: Events, buf: &mut impl Buf) {
+    if buf.remaining() < 31 {
         return;
     }
 
-    let first_byte = buf.get_u8();
-    if let Some(event) = Events::from_u8(first_byte) {
-        match event {
-            Events::MappingNotify => {
-                buf.advance(1); // unused
-                let sequence_number = buf.get_u16_le();
-                let request = buf.get_u8();
-                let key_code = buf.get_u8();
-                let count = buf.get_u8();
-                eprintln!(
-                    "sequence_number: {}, request: {}, key_code: {}, count: {}",
-                    sequence_number, request, key_code, count
-                );
-                buf.advance(25); // unused
-            }
-            _ => panic!("unable to decode event yet: {}", first_byte),
+    match event {
+        Events::MappingNotify => {
+            buf.advance(1); // unused
+            let sequence_number = buf.get_u16_le();
+            let request = buf.get_u8();
+            let key_code = buf.get_u8();
+            let count = buf.get_u8();
+            eprintln!(
+                "sequence_number: {}, request: {}, key_code: {}, count: {}",
+                sequence_number, request, key_code, count
+            );
+            buf.advance(25); // unused
         }
-    } else {
-        panic!("unknown event {}", first_byte);
+        _ => panic!("unable to decode event yet: {:?}", event),
     }
 }
 
@@ -425,6 +447,7 @@ async fn main() -> io::Result<()> {
     );
 
     let (mut read_stream, write_stream) = stream.into_split();
+    let (tx, mut rx) = mpsc::channel(1);
 
     let mut stream = write_stream;
     tokio::spawn(async move {
@@ -436,37 +459,50 @@ async fn main() -> io::Result<()> {
             // be zero. Every reply also contains the least significant 16
             // bits of the sequence number of the corresponding request.
             let mut response_buf = BytesMut::new();
-            eprintln!("reading create window response ...");
             let n = read_stream.read_buf(&mut response_buf).await;
-            eprintln!("create window response: {:?}", response_buf);
-            if response_buf.remaining() >= 32 {
-                decode_event(&mut response_buf);
-                decode_event(&mut response_buf);
-            }
-            if !response_buf.is_empty() && response_buf.get_u8() == 0
-            /* Error */
-            {
-                let error_code =
-                    ErrorCode::from_u8(response_buf.get_u8()).expect("valid error code");
-                eprintln!("create window code field: {:?}", error_code);
-                eprintln!("sequence number: {}", response_buf.get_u16_le());
-                match error_code {
-                    ErrorCode::IDChoice | ErrorCode::Window => {
-                        eprintln!("bad resource id: {}", response_buf.get_u32_le());
+            while response_buf.remaining() >= 32 {
+                let first_byte = response_buf.get_u8();
+
+                if first_byte == 0 {
+                    // Error
+                    let error_code =
+                        ErrorCode::from_u8(response_buf.get_u8()).expect("valid error code");
+                    eprintln!("code field: {:?}", error_code);
+                    eprintln!("sequence number: {}", response_buf.get_u16_le());
+                    match error_code {
+                        ErrorCode::IDChoice | ErrorCode::Window => {
+                            eprintln!("bad resource id: {}", response_buf.get_u32_le());
+                        }
+                        ErrorCode::Match => {
+                            response_buf.advance(4); // unused
+                        }
+                        _ => (),
                     }
-                    ErrorCode::Match => {
-                        response_buf.advance(4); // unused
+                    eprintln!("minor opcode: {}", response_buf.get_u16_le());
+                    let major_opcode = response_buf.get_u8();
+                    eprintln!(
+                        "major opcode: {} {:?}",
+                        major_opcode,
+                        Opcodes::from_u8(major_opcode)
+                    );
+                    response_buf.advance(21); // 21 unused bytes
+                } else if first_byte == 1 {
+                    // Reply
+                    let opcode = rx.recv().await;
+                    eprintln!("received reply: {:?}, opcode: {:?}", response_buf, opcode);
+                    match opcode {
+                        Some(Opcodes::GetWindowAttributes) => {
+                            let backing_store = response_buf.get_u8();
+                            let sequence_number = response_buf.get_u16_le();
+                            let reply_length = response_buf.get_u32_le();
+                            eprintln!("reply_length: {}", reply_length);
+                            response_buf.advance(36);
+                        }
+                        _ => panic!("unknown opcode {:?}", opcode),
                     }
-                    _ => (),
+                } else if let Some(event) = Events::from_u8(first_byte) {
+                    decode_event(event, &mut response_buf);
                 }
-                eprintln!("minor opcode: {}", response_buf.get_u16_le());
-                let major_opcode = response_buf.get_u8();
-                eprintln!(
-                    "major opcode: {} {:?}",
-                    major_opcode,
-                    Opcodes::from_u8(major_opcode)
-                );
-                response_buf.advance(21); // 21 unused bytes
             }
         }
     });
@@ -478,7 +514,22 @@ async fn main() -> io::Result<()> {
     let mut request_buf = BytesMut::new();
     map_window_request(&mut request_buf, window_id);
     stream.write_all_buf(&mut request_buf).await?;
-    eprintln!("read map window return value");
+
+    let mut request_buf = BytesMut::new();
+    get_window_attributes_request(&mut request_buf, window_id);
+    tx.send(Opcodes::GetWindowAttributes).await;
+    stream.write_all_buf(&mut request_buf).await?;
+    eprintln!("wrote get_window_attributes_request");
+
+    /*
+        let mut request_buf = BytesMut::new();
+        unmap_window_request(&mut request_buf, window_id);
+        stream.write_all_buf(&mut request_buf).await?;
+
+        let mut request_buf = BytesMut::new();
+        destroy_window_request(&mut request_buf, window_id);
+        stream.write_all_buf(&mut request_buf).await?;
+    */
 
     sleep(Duration::from_secs(10)).await;
 
