@@ -4,7 +4,7 @@
 use ascii::AsciiString;
 use bytes::{Buf, BufMut, BytesMut};
 use colored::Colorize;
-use enumflags2::{bitflags, BitFlags};
+use enumflags2::{bitflags, make_bitflags, BitFlags};
 use num_traits::FromPrimitive;
 use std::io;
 use std::time::Duration;
@@ -200,7 +200,7 @@ struct VisualType {
 fn create_window_request(buf: &mut BytesMut, connection: &Connection, screen: &Screen) -> WindowId {
     buf.put_u8(Opcodes::CreateWindow as u8); // opcode
     buf.put_u8(0); // depth, 0 means copy from parent
-    buf.put_u16_le(8 /* + values.len() */); // request len
+    buf.put_u16_le(8 + 1 /* + values.len() */); // request len
     buf.put_u32_le(connection.resource_id_base + 1); // wid
     buf.put_u32_le(38); // parent
     buf.put_i16_le(200); // x
@@ -210,7 +210,39 @@ fn create_window_request(buf: &mut BytesMut, connection: &Connection, screen: &S
     buf.put_u16_le(5); // border-width
     buf.put_u16_le(0); // class InputOutput
     buf.put_u32_le(screen.root_visual); // visual id
-    buf.put_u32_le(0); // bitmask
+    buf.put_u32_le(0x00000800); // bitmask
+
+    // values
+    /*
+    buf.put_u32_le(0); // background-pixmap
+    buf.put_u32_le(0); // background-pixel
+    buf.put_u32_le(0); // border-pixmap
+    buf.put_u32_le(0); // border-pixel
+    buf.put_u8(0); // bit-gravity
+    buf.put_u8(0); // win-gravity
+    buf.put_u8(0); // backing-store
+    buf.put_u32_le(0); // backing-planes
+    buf.put_u32_le(0); // backing-pixel
+    buf.put_u8(0); // override-redirect
+    buf.put_u8(0); // save-under
+    */
+
+    buf.put_u32_le(
+        make_bitflags!(Event::{
+            KeyPress |
+            KeyRelease |
+            ButtonPress |
+            ButtonRelease |
+            EnterWindow |
+            LeaveWindow})
+        .bits(),
+    ); // event-mask
+
+    /*
+    buf.put_u32_le(0); // do-not-propagate-mask
+    buf.put_u32_le(0); // colormap
+    buf.put_u32_le(0); // cursor
+    */
 
     connection.resource_id_base + 1
 }
@@ -253,7 +285,53 @@ fn decode_event(event: Events, buf: &mut impl Buf) {
         return;
     }
 
+    eprintln!("event: {:?}", event);
+
     match event {
+        Events::KeyPress | Events::KeyRelease => {
+            let detail = buf.get_u8(); // keycode
+            let sequence_number = buf.get_u16_le();
+            let timestamp = buf.get_u32_le();
+            // 1     KEYCODE                         detail
+            // 2     CARD16                          sequence number
+            // 4     TIMESTAMP                       time
+            // 4     WINDOW                          root
+            // 4     WINDOW                          event
+            // 4     WINDOW                          child
+            //      0     None
+            // 2     INT16                           root-x
+            // 2     INT16                           root-y
+            // 2     INT16                           event-x
+            // 2     INT16                           event-y
+            // 2     SETofKEYBUTMASK                 state
+            // 1     BOOL                            same-screen
+            // 1                                     unused
+            buf.advance(24);
+
+            eprintln!("keycode: {}", detail);
+        }
+        Events::ButtonPress | Events::ButtonRelease => {
+            let detail = buf.get_u8(); // keycode
+            let sequence_number = buf.get_u16_le();
+            let timestamp = buf.get_u32_le();
+
+            buf.advance(24);
+
+            eprintln!("button: {}", detail);
+        }
+        Events::EnterNotify | Events::LeaveNotify => {
+            let detail = buf.get_u8();
+            let sequence_number = buf.get_u16_le();
+            let timestamp = buf.get_u32_le();
+            let root_window = buf.get_u32_le();
+            let event_window = buf.get_u32_le();
+            let child_window = buf.get_u32_le();
+            let (root_x, root_y) = (buf.get_u16_le(), buf.get_u16_le());
+            let (event_x, event_y) = (buf.get_u16_le(), buf.get_u16_le());
+            let state = buf.get_u16_le();
+            let mode = buf.get_u8();
+            let same_screen_focus = buf.get_u8();
+        }
         Events::MappingNotify => {
             buf.advance(1); // unused
             let sequence_number = buf.get_u16_le();
@@ -465,15 +543,16 @@ async fn main() -> io::Result<()> {
 
                 if first_byte == 0 {
                     // Error
-                    let error_code =
-                        ErrorCode::from_u8(response_buf.get_u8()).expect("valid error code");
+                    let raw_error_code = response_buf.get_u8();
+                    eprintln!("raw_error_code: {}", raw_error_code);
+                    let error_code = ErrorCode::from_u8(raw_error_code).expect("valid error code");
                     eprintln!("code field: {:?}", error_code);
                     eprintln!("sequence number: {}", response_buf.get_u16_le());
                     match error_code {
                         ErrorCode::IDChoice | ErrorCode::Window => {
                             eprintln!("bad resource id: {}", response_buf.get_u32_le());
                         }
-                        ErrorCode::Match => {
+                        ErrorCode::Match | ErrorCode::Length => {
                             response_buf.advance(4); // unused
                         }
                         _ => (),
@@ -520,6 +599,8 @@ async fn main() -> io::Result<()> {
     tx.send(Opcodes::GetWindowAttributes).await;
     stream.write_all_buf(&mut request_buf).await?;
     eprintln!("wrote get_window_attributes_request");
+
+    // todo!("use one shot channel to back propagate return values, see https://docs.rs/tokio/1.6.1/tokio/sync/index.html#oneshot-channel");
 
     /*
         let mut request_buf = BytesMut::new();
