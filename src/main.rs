@@ -198,9 +198,28 @@ struct VisualType {
 }
 
 fn create_window_request(buf: &mut BytesMut, connection: &Connection, screen: &Screen) -> WindowId {
+    #[repr(u32)]
+    enum BitmaskValues {
+        BackgroundPixmap = 0x00000001,
+        BackgroundPixel = 0x00000002,
+        BorderPixmap = 0x00000004,
+        BorderPixel = 0x00000008,
+        BitGravity = 0x00000010,
+        WinGravity = 0x00000020,
+        BackingStore = 0x00000040,
+        BackingPlanes = 0x00000080,
+        BackingPixel = 0x00000100,
+        OverrideRedirect = 0x00000200,
+        SaveUnder = 0x00000400,
+        EventMask = 0x00000800,
+        DoNotPropagateMask = 0x00001000,
+        Colormap = 0x00002000,
+        Cursor = 0x00004000,
+    }
+
     buf.put_u8(Opcodes::CreateWindow as u8); // opcode
     buf.put_u8(0); // depth, 0 means copy from parent
-    buf.put_u16_le(8 + 1 /* + values.len() */); // request len
+    buf.put_u16_le(8 + 2 /* + values.len() */); // request len
     buf.put_u32_le(connection.resource_id_base + 1); // wid
     buf.put_u32_le(38); // parent
     buf.put_i16_le(200); // x
@@ -210,23 +229,16 @@ fn create_window_request(buf: &mut BytesMut, connection: &Connection, screen: &S
     buf.put_u16_le(5); // border-width
     buf.put_u16_le(0); // class InputOutput
     buf.put_u32_le(screen.root_visual); // visual id
-    buf.put_u32_le(0x00000800); // bitmask
+    buf.put_u32_le(BitmaskValues::BackgroundPixel as u32 | BitmaskValues::EventMask as u32); // bitmask
 
-    // values
-    /*
-    buf.put_u32_le(0); // background-pixmap
-    buf.put_u32_le(0); // background-pixel
-    buf.put_u32_le(0); // border-pixmap
-    buf.put_u32_le(0); // border-pixel
-    buf.put_u8(0); // bit-gravity
-    buf.put_u8(0); // win-gravity
-    buf.put_u8(0); // backing-store
-    buf.put_u32_le(0); // backing-planes
-    buf.put_u32_le(0); // backing-pixel
-    buf.put_u8(0); // override-redirect
-    buf.put_u8(0); // save-under
-    */
-
+    // list-of-values
+    //
+    // values must be given in the order defined by the value of
+    // BitmaskValues, for example:
+    //
+    // the value for BitmaskValues::BorderPixmap must be defined
+    // before BitmaskValues::EventMask
+    buf.put_u32_le(screen.white_pixel); // background-pixel
     buf.put_u32_le(
         make_bitflags!(Event::{
             KeyPress |
@@ -237,12 +249,6 @@ fn create_window_request(buf: &mut BytesMut, connection: &Connection, screen: &S
             LeaveWindow})
         .bits(),
     ); // event-mask
-
-    /*
-    buf.put_u32_le(0); // do-not-propagate-mask
-    buf.put_u32_le(0); // colormap
-    buf.put_u32_le(0); // cursor
-    */
 
     connection.resource_id_base + 1
 }
