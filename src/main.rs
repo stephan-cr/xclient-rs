@@ -11,7 +11,7 @@ use std::time::Duration;
 use std::vec::Vec;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::sleep;
 
 #[derive(Debug, num_derive::FromPrimitive)]
@@ -525,7 +525,10 @@ async fn main() -> io::Result<()> {
     );
 
     let (mut read_stream, write_stream) = stream.into_split();
-    let (tx, mut rx) = mpsc::channel(1);
+    let (tx, mut rx): (
+        tokio::sync::mpsc::Sender<(Opcodes, oneshot::Sender<i32>)>,
+        tokio::sync::mpsc::Receiver<(Opcodes, oneshot::Sender<i32>)>,
+    ) = mpsc::channel(1);
 
     let mut stream = write_stream;
     tokio::spawn(async move {
@@ -567,17 +570,20 @@ async fn main() -> io::Result<()> {
                     response_buf.advance(21); // 21 unused bytes
                 } else if first_byte == 1 {
                     // Reply
-                    let opcode = rx.recv().await;
-                    eprintln!("received reply: {:?}, opcode: {:?}", response_buf, opcode);
-                    match opcode {
-                        Some(Opcodes::GetWindowAttributes) => {
-                            let backing_store = response_buf.get_u8();
-                            let sequence_number = response_buf.get_u16_le();
-                            let reply_length = response_buf.get_u32_le();
-                            eprintln!("reply_length: {}", reply_length);
-                            response_buf.advance(36);
+                    let reply_info = rx.recv().await;
+                    if let Some((opcode, one_tx)) = reply_info {
+                        eprintln!("received reply: {:?}, opcode: {:?}", response_buf, opcode);
+                        match opcode {
+                            Opcodes::GetWindowAttributes => {
+                                let backing_store = response_buf.get_u8();
+                                let sequence_number = response_buf.get_u16_le();
+                                let reply_length = response_buf.get_u32_le();
+                                eprintln!("reply_length: {}", reply_length);
+                                response_buf.advance(36);
+                            }
+                            _ => panic!("unknown opcode {:?}", opcode),
                         }
-                        _ => panic!("unknown opcode {:?}", opcode),
+                        one_tx.send(23);
                     }
                 } else if let Some(event) = Events::from_u8(first_byte) {
                     decode_event(event, &mut response_buf);
@@ -596,23 +602,21 @@ async fn main() -> io::Result<()> {
 
     let mut request_buf = BytesMut::new();
     get_window_attributes_request(&mut request_buf, window_id);
-    tx.send(Opcodes::GetWindowAttributes).await;
+    let (one_tx, mut one_rx) = oneshot::channel();
+    tx.send((Opcodes::GetWindowAttributes, one_tx)).await;
     stream.write_all_buf(&mut request_buf).await?;
-    eprintln!("wrote get_window_attributes_request");
-
-    // todo!("use one shot channel to back propagate return values, see https://docs.rs/tokio/1.6.1/tokio/sync/index.html#oneshot-channel");
-
-    /*
-        let mut request_buf = BytesMut::new();
-        unmap_window_request(&mut request_buf, window_id);
-        stream.write_all_buf(&mut request_buf).await?;
-
-        let mut request_buf = BytesMut::new();
-        destroy_window_request(&mut request_buf, window_id);
-        stream.write_all_buf(&mut request_buf).await?;
-    */
+    let x: i32 = one_rx.await.unwrap();
+    eprintln!("wrote get_window_attributes_request {}", x);
 
     sleep(Duration::from_secs(10)).await;
+
+    let mut request_buf = BytesMut::new();
+    unmap_window_request(&mut request_buf, window_id);
+    stream.write_all_buf(&mut request_buf).await?;
+
+    let mut request_buf = BytesMut::new();
+    destroy_window_request(&mut request_buf, window_id);
+    stream.write_all_buf(&mut request_buf).await?;
 
     Ok(())
 }
