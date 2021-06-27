@@ -26,6 +26,7 @@ enum Opcodes {
     CreateGC = 55,
     ChangeGC = 56,
     CopyGC = 57,
+    FreeGC = 60,
 }
 
 enum ImageByteOrder {
@@ -139,6 +140,7 @@ enum Events {
 }
 
 type WindowId = u32;
+type GCId = u32;
 type ColorMap = u32;
 type VisualId = u32;
 
@@ -197,7 +199,11 @@ struct VisualType {
     blue_mask: u32,
 }
 
-fn create_window_request(buf: &mut BytesMut, connection: &Connection, screen: &Screen) -> WindowId {
+fn create_window_request(
+    buf: &mut impl BufMut,
+    connection: &Connection,
+    screen: &Screen,
+) -> WindowId {
     #[repr(u32)]
     enum BitmaskValues {
         BackgroundPixmap = 0x00000001,
@@ -253,14 +259,14 @@ fn create_window_request(buf: &mut BytesMut, connection: &Connection, screen: &S
     connection.resource_id_base + 1
 }
 
-fn destroy_window_request(buf: &mut BytesMut, wid: WindowId) {
+fn destroy_window_request(buf: &mut impl BufMut, wid: WindowId) {
     buf.put_u8(Opcodes::DestroyWindow as u8); // opcode
     buf.put_u8(0); // padding
     buf.put_u16_le(2); // request length
     buf.put_u32_le(wid); // wid
 }
 
-fn get_window_attributes_request(buf: &mut BytesMut, wid: WindowId) {
+fn get_window_attributes_request(buf: &mut impl BufMut, wid: WindowId) {
     buf.put_u8(Opcodes::GetWindowAttributes as u8); // opcode
     buf.put_u8(0); // padding
     buf.put_u16_le(2); // request length
@@ -272,18 +278,38 @@ const fn pad(len: usize) -> usize {
     (4 - (len % 4)) % 4
 }
 
-fn map_window_request(buf: &mut BytesMut, window_id: WindowId) {
+fn map_window_request(buf: &mut impl BufMut, window_id: WindowId) {
     buf.put_u8(Opcodes::MapWindow as u8); // opcode
     buf.put_u8(0); // padding
     buf.put_u16_le(2); // request length
     buf.put_u32_le(window_id);
 }
 
-fn unmap_window_request(buf: &mut BytesMut, window_id: WindowId) {
+fn unmap_window_request(buf: &mut impl BufMut, window_id: WindowId) {
     buf.put_u8(Opcodes::UnmapWindow as u8); // opcode
     buf.put_u8(0); // padding
     buf.put_u16_le(2); // request length
     buf.put_u32_le(window_id);
+}
+
+fn create_gc(buf: &mut impl BufMut, connection: &Connection, window_id: WindowId) -> GCId {
+    buf.put_u8(Opcodes::CreateGC as u8); // opcode
+    buf.put_u8(0); // padding
+    buf.put_u16_le(4 + 0); // request length
+    buf.put_u32_le(connection.resource_id_base + 2); // cid
+    buf.put_u32_le(window_id); // drawable
+    buf.put_u32_le(0); // bitmask
+
+    // values list
+
+    connection.resource_id_base + 2
+}
+
+fn free_gc(buf: &mut impl BufMut, gc_id: GCId) {
+    buf.put_u8(Opcodes::FreeGC as u8); // opcode
+    buf.put_u8(0); // padding
+    buf.put_u16_le(2); // request length
+    buf.put_u32_le(gc_id);
 }
 
 fn decode_event(event: Events, buf: &mut impl Buf) {
@@ -304,7 +330,7 @@ fn decode_event(event: Events, buf: &mut impl Buf) {
             // 4     WINDOW                          root
             // 4     WINDOW                          event
             // 4     WINDOW                          child
-            //      0     None
+            // 0     None
             // 2     INT16                           root-x
             // 2     INT16                           root-y
             // 2     INT16                           event-x
@@ -561,10 +587,10 @@ async fn main() -> io::Result<()> {
                         ErrorCode::IDChoice | ErrorCode::Window => {
                             eprintln!("bad resource id: {}", response_buf.get_u32_le());
                         }
-                        ErrorCode::Match | ErrorCode::Length => {
+                        ErrorCode::Request | ErrorCode::Match | ErrorCode::Length => {
                             response_buf.advance(4); // unused
                         }
-                        _ => (),
+                        _ => unimplemented!("error code not implemented {:?}", error_code),
                     }
                     eprintln!("minor opcode: {}", response_buf.get_u16_le());
                     let major_opcode = response_buf.get_u8();
@@ -574,6 +600,7 @@ async fn main() -> io::Result<()> {
                         Opcodes::from_u8(major_opcode)
                     );
                     response_buf.advance(21); // 21 unused bytes
+                    eprintln!("--");
                 } else if first_byte == 1 {
                     // Reply
                     let reply_info = rx.recv().await;
@@ -614,7 +641,13 @@ async fn main() -> io::Result<()> {
     let x: i32 = one_rx.await.unwrap();
     eprintln!("wrote get_window_attributes_request {}", x);
 
+    let gc_id = create_gc(&mut request_buf, &connection, window_id);
+    stream.write_all_buf(&mut request_buf).await?;
+
     sleep(Duration::from_secs(10)).await;
+
+    free_gc(&mut request_buf, gc_id);
+    stream.write_all_buf(&mut request_buf).await?;
 
     let mut request_buf = BytesMut::new();
     unmap_window_request(&mut request_buf, window_id);
