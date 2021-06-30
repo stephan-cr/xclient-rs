@@ -6,7 +6,9 @@ use bytes::{Buf, BufMut, BytesMut};
 use colored::Colorize;
 use enumflags2::{bitflags, make_bitflags, BitFlags};
 use num_traits::FromPrimitive;
+use std::convert::TryInto;
 use std::io;
+use std::iter::Iterator;
 use std::time::Duration;
 use std::vec::Vec;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -209,6 +211,7 @@ fn create_window_request(
     buf: &mut impl BufMut,
     connection: &Connection,
     screen: &Screen,
+    id_generator: &mut impl Iterator<Item = u32>,
 ) -> WindowId {
     #[repr(u32)]
     enum BitmaskValues {
@@ -232,7 +235,12 @@ fn create_window_request(
     buf.put_u8(Opcodes::CreateWindow as u8); // opcode
     buf.put_u8(0); // depth, 0 means copy from parent
     buf.put_u16_le(8 + 2 /* + values.len() */); // request len
-    buf.put_u32_le(connection.resource_id_base + 1); // wid
+    let id = if let Some(id) = id_generator.next() {
+        buf.put_u32_le(id); // wid
+        id
+    } else {
+        panic!("no more ids");
+    };
     buf.put_u32_le(screen.window); // parent
     buf.put_i16_le(200); // x
     buf.put_i16_le(200); // y
@@ -262,7 +270,7 @@ fn create_window_request(
         .bits(),
     ); // event-mask
 
-    connection.resource_id_base + 1
+    id
 }
 
 fn destroy_window_request(buf: &mut impl BufMut, wid: WindowId) {
@@ -335,7 +343,7 @@ fn configure_window(
     let n = commands.len();
     buf.put_u8(Opcodes::UnmapWindow as u8); // opcode
     buf.put_u8(0); // padding
-    buf.put_u16_le(3 + n); // request length
+    buf.put_u16_le((3 + n).try_into().unwrap()); // request length
     buf.put_u32_le(window_id);
     buf.put_u16_le(BitmaskValues::X as u16); // value-mask
     buf.put_u16_le(0); // unused
@@ -344,17 +352,27 @@ fn configure_window(
     buf.put_u16_le(0); // padding
 }
 
-fn create_gc(buf: &mut impl BufMut, connection: &Connection, window_id: WindowId) -> GCId {
+fn create_gc(
+    buf: &mut impl BufMut,
+    connection: &Connection,
+    window_id: WindowId,
+    id_generator: &mut impl Iterator<Item = u32>,
+) -> GCId {
     buf.put_u8(Opcodes::CreateGC as u8); // opcode
     buf.put_u8(0); // padding
     buf.put_u16_le(4 + 0); // request length
-    buf.put_u32_le(connection.resource_id_base + 2); // cid
+    let id = if let Some(id) = id_generator.next() {
+        buf.put_u32_le(id); // cid
+        id
+    } else {
+        panic!("no more ids");
+    };
     buf.put_u32_le(window_id); // drawable
     buf.put_u32_le(0); // bitmask
 
     // values list
 
-    connection.resource_id_base + 2
+    id
 }
 
 fn free_gc(buf: &mut impl BufMut, gc_id: GCId) {
@@ -429,6 +447,39 @@ fn decode_event(event: Events, buf: &mut impl Buf) {
             buf.advance(25); // unused
         }
         _ => panic!("unable to decode event yet: {:?}", event),
+    }
+}
+
+struct IdGenerator {
+    last: u32,
+    max: u32,
+    base: u32,
+    inc: u32,
+}
+
+impl IdGenerator {
+    fn new(base: u32, mask: u32) -> Self {
+        eprintln!("inc {}", mask & (!mask + 1));
+        Self {
+            last: 0,
+            max: mask,
+            base: base,
+            inc: mask & (!mask + 1),
+        }
+    }
+}
+
+impl Iterator for IdGenerator {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // naive implementation for now
+        //
+        // it should handle overflows in the future and should return
+        // None in this case
+        self.last += self.inc;
+
+        Some(self.last | self.base)
     }
 }
 
@@ -677,8 +728,11 @@ async fn main() -> io::Result<()> {
         }
     });
 
+    let mut id_generator = IdGenerator::new(resource_id_base, resource_id_mask);
+
     let mut request_buf = BytesMut::new();
-    let window_id = create_window_request(&mut request_buf, &connection, &screen);
+    let window_id =
+        create_window_request(&mut request_buf, &connection, &screen, &mut id_generator);
     stream.write_all_buf(&mut request_buf).await?;
 
     let mut request_buf = BytesMut::new();
@@ -693,7 +747,7 @@ async fn main() -> io::Result<()> {
     let x: i32 = one_rx.await.unwrap();
     eprintln!("wrote get_window_attributes_request {}", x);
 
-    let gc_id = create_gc(&mut request_buf, &connection, window_id);
+    let gc_id = create_gc(&mut request_buf, &connection, window_id, &mut id_generator);
     stream.write_all_buf(&mut request_buf).await?;
 
     sleep(Duration::from_secs(10)).await;
