@@ -22,7 +22,13 @@ enum Opcodes {
     GetWindowAttributes = 3,
     DestroyWindow = 4,
     MapWindow = 8,
+    MapSubwindows = 9,
     UnmapWindow = 10,
+    UnmapSubwindows = 11,
+    ConfigureWindow = 12,
+    CirculateWindow = 13,
+    GetGeometry = 14,
+    QueryTree = 15,
     CreateGC = 55,
     ChangeGC = 56,
     CopyGC = 57,
@@ -227,12 +233,12 @@ fn create_window_request(
     buf.put_u8(0); // depth, 0 means copy from parent
     buf.put_u16_le(8 + 2 /* + values.len() */); // request len
     buf.put_u32_le(connection.resource_id_base + 1); // wid
-    buf.put_u32_le(38); // parent
+    buf.put_u32_le(screen.window); // parent
     buf.put_i16_le(200); // x
     buf.put_i16_le(200); // y
     buf.put_u16_le(100); // width
     buf.put_u16_le(100); // height
-    buf.put_u16_le(5); // border-width
+    buf.put_u16_le(4); // border-width
     buf.put_u16_le(0); // class InputOutput
     buf.put_u32_le(screen.root_visual); // visual id
     buf.put_u32_le(BitmaskValues::BackgroundPixel as u32 | BitmaskValues::EventMask as u32); // bitmask
@@ -290,6 +296,52 @@ fn unmap_window_request(buf: &mut impl BufMut, window_id: WindowId) {
     buf.put_u8(0); // padding
     buf.put_u16_le(2); // request length
     buf.put_u32_le(window_id);
+}
+
+#[repr(u8)]
+enum StackModes {
+    Above = 0,
+    Below = 1,
+    TopIf = 2,
+    BottomIf = 3,
+    Opposite = 4,
+}
+
+enum ConfigureWindowCommands {
+    X(i16),
+    Y(i16),
+    Width(u16),
+    Height(u16),
+    BorderWidth(u16),
+    Sibling(WindowId),
+    StackMode(StackModes),
+}
+
+fn configure_window(
+    buf: &mut impl BufMut,
+    window_id: WindowId,
+    commands: &[ConfigureWindowCommands],
+) {
+    #[repr(u16)]
+    enum BitmaskValues {
+        X = 0x0001,
+        Y = 0x0002,
+        Width = 0x0004,
+        Height = 0x0008,
+        BorderWidth = 0x0010,
+        Sibling = 0x0020,
+        StackMode = 0x0040,
+    }
+    let n = commands.len();
+    buf.put_u8(Opcodes::UnmapWindow as u8); // opcode
+    buf.put_u8(0); // padding
+    buf.put_u16_le(3 + n); // request length
+    buf.put_u32_le(window_id);
+    buf.put_u16_le(BitmaskValues::X as u16); // value-mask
+    buf.put_u16_le(0); // unused
+
+    buf.put_i16_le(5); // x value
+    buf.put_u16_le(0); // padding
 }
 
 fn create_gc(buf: &mut impl BufMut, connection: &Connection, window_id: WindowId) -> GCId {
