@@ -329,6 +329,8 @@ fn configure_window(
     buf: &mut impl BufMut,
     window_id: WindowId,
     commands: &[ConfigureWindowCommands],
+    x: i16,
+    y: i16,
 ) {
     #[repr(u16)]
     enum BitmaskValues {
@@ -341,14 +343,16 @@ fn configure_window(
         StackMode = 0x0040,
     }
     let n = commands.len();
-    buf.put_u8(Opcodes::UnmapWindow as u8); // opcode
+    buf.put_u8(Opcodes::ConfigureWindow as u8); // opcode
     buf.put_u8(0); // padding
     buf.put_u16_le((3 + n).try_into().unwrap()); // request length
     buf.put_u32_le(window_id);
-    buf.put_u16_le(BitmaskValues::X as u16); // value-mask
+    buf.put_u16_le(BitmaskValues::X as u16 | BitmaskValues::Y as u16); // value-mask
     buf.put_u16_le(0); // unused
 
-    buf.put_i16_le(5); // x value
+    buf.put_i16_le(200 + x); // x value
+    buf.put_u16_le(0); // padding
+    buf.put_i16_le(200 + y);
     buf.put_u16_le(0); // padding
 }
 
@@ -477,6 +481,10 @@ impl Iterator for IdGenerator {
         //
         // it should handle overflows in the future and should return
         // None in this case
+        if self.last == self.max {
+            return None;
+        }
+
         self.last += self.inc;
 
         Some(self.last | self.base)
@@ -495,10 +503,6 @@ async fn main() -> io::Result<()> {
     connection_req.put_u16_le(0); // length of authorization-protocol-data
     connection_req.put_u16_le(0);
     stream.write_all_buf(&mut connection_req).await?;
-
-    // let mut connection_repl = BytesMut::with_capacity(12);
-    // let n = stream.read(&mut connection_repl).await?;
-    // eprintln!("{} - {:?}", n, connection_repl);
 
     let mut buf = [0; 1024];
     let n = stream.read(&mut buf).await?;
@@ -745,12 +749,23 @@ async fn main() -> io::Result<()> {
     tx.send((Opcodes::GetWindowAttributes, one_tx)).await;
     stream.write_all_buf(&mut request_buf).await?;
     let x: i32 = one_rx.await.unwrap();
-    eprintln!("wrote get_window_attributes_request {}", x);
 
     let gc_id = create_gc(&mut request_buf, &connection, window_id, &mut id_generator);
     stream.write_all_buf(&mut request_buf).await?;
 
-    sleep(Duration::from_secs(10)).await;
+    for i in 0..100 {
+        eprintln!("{}", i);
+        sleep(Duration::from_millis(200)).await;
+        request_buf.clear();
+        configure_window(
+            &mut request_buf,
+            window_id,
+            &[ConfigureWindowCommands::X(5), ConfigureWindowCommands::Y(5)],
+            2 * i,
+            0,
+        );
+        stream.write_all_buf(&mut request_buf).await?;
+    }
 
     free_gc(&mut request_buf, gc_id);
     stream.write_all_buf(&mut request_buf).await?;
