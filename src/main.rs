@@ -1,5 +1,6 @@
 #![warn(rust_2018_idioms)]
 #![allow(unused_variables)]
+#![allow(dead_code)]
 
 use ascii::AsciiString;
 use bytes::{Buf, BufMut, BytesMut};
@@ -7,7 +8,7 @@ use colored::Colorize;
 use enumflags2::{bitflags, make_bitflags, BitFlags};
 use num_traits::FromPrimitive;
 use std::convert::TryInto;
-use std::io;
+use std::error;
 use std::iter::Iterator;
 use std::time::Duration;
 use std::vec::Vec;
@@ -463,7 +464,6 @@ struct IdGenerator {
 
 impl IdGenerator {
     fn new(base: u32, mask: u32) -> Self {
-        eprintln!("inc {}", mask & (!mask + 1));
         Self {
             last: 0,
             max: mask,
@@ -492,7 +492,7 @@ impl Iterator for IdGenerator {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> io::Result<()> {
+async fn main() -> Result<(), Box<dyn error::Error>> {
     let mut stream = UnixStream::connect("/tmp/.X11-unix/X1").await?; // Xnest server
     let mut connection_req = BytesMut::with_capacity(12);
     connection_req.put_u8(0x6c); // little endian byte order (LSB first)
@@ -748,8 +748,8 @@ async fn main() -> io::Result<()> {
 
     let mut request_buf = BytesMut::new();
     get_window_attributes_request(&mut request_buf, window_id);
-    let (one_tx, mut one_rx) = oneshot::channel();
-    tx.send((Opcodes::GetWindowAttributes, one_tx)).await;
+    let (one_tx, one_rx) = oneshot::channel();
+    tx.send((Opcodes::GetWindowAttributes, one_tx)).await?;
     stream.write_all_buf(&mut request_buf).await?;
     let x: i32 = one_rx.await.unwrap();
 
