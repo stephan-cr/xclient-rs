@@ -504,10 +504,9 @@ async fn main() -> io::Result<()> {
     connection_req.put_u16_le(0);
     stream.write_all_buf(&mut connection_req).await?;
 
-    let mut buf = [0; 1024];
-    let n = stream.read(&mut buf).await?;
-    eprintln!("{} - {:?}", n, &buf[..n]);
-    let mut response = &buf[..n];
+    let mut response = BytesMut::new();
+    let n = stream.read_buf(&mut response).await?;
+    eprintln!("{} - {:?}", n, &response[..n]);
     let status_code = response.get_u8();
     match status_code {
         0 => panic!("failed"),
@@ -528,6 +527,10 @@ async fn main() -> io::Result<()> {
 
     let additional_data_len = response.get_u16_le();
     eprintln!("additional data len: {} [bytes]", additional_data_len * 4);
+
+    while response.remaining() < additional_data_len as usize * 4 {
+        stream.read_buf(&mut response).await?;
+    }
 
     let release_number = response.get_u32_le();
     let resource_id_base = response.get_u32_le();
