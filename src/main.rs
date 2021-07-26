@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use ascii::AsciiString;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use colored::Colorize;
 use enumflags2::{bitflags, make_bitflags, BitFlags};
 use num_traits::FromPrimitive;
@@ -32,10 +32,14 @@ enum Opcodes {
     CirculateWindow = 13,
     GetGeometry = 14,
     QueryTree = 15,
+    CreatePixmap = 53,
+    FreePixmap = 54,
     CreateGC = 55,
     ChangeGC = 56,
     CopyGC = 57,
     FreeGC = 60,
+    QueryExtension = 98,
+    ListExtensions = 99,
 }
 
 enum ImageByteOrder {
@@ -151,6 +155,7 @@ enum Events {
 type WindowId = u32;
 type GCId = u32;
 type ColorMap = u32;
+type PixmapId = u32;
 type VisualId = u32;
 
 #[derive(Debug)]
@@ -288,6 +293,26 @@ fn get_window_attributes_request(buf: &mut impl BufMut, wid: WindowId) {
     buf.put_u32_le(wid); // wid
 }
 
+#[derive(Debug)]
+struct WindowAttributesReply {
+    backing_store: u8,
+    sequence_number: u16,
+    reply_length: u32,
+}
+
+impl WindowAttributesReply {
+    fn from_bytes(buf: &mut impl Buf) -> Self {
+        let this = Self {
+            backing_store: buf.get_u8(),
+            sequence_number: buf.get_u16_le(),
+            reply_length: buf.get_u32_le(),
+        };
+        buf.advance(36);
+
+        this
+    }
+}
+
 // pad(E) = (4 - (E mod 4)) mod 4
 const fn pad(len: usize) -> usize {
     (4 - (len % 4)) % 4
@@ -387,6 +412,34 @@ fn free_gc(buf: &mut impl BufMut, gc_id: GCId) {
     buf.put_u32_le(gc_id);
 }
 
+fn query_extension(buf: &mut impl BufMut) {
+    buf.put_u8(Opcodes::QueryExtension as u8); // opcode
+    buf.put_u8(0); // padding
+    let extension_name = b"SHAPE";
+    let n = extension_name.len();
+    let p = pad(n);
+    buf.put_u16_le((2 + (n + p) / 4).try_into().unwrap()); // request length
+    buf.put_u16_le(n as u16); // length of name
+    buf.put_u16_le(0); // unused
+    buf.put_slice(extension_name);
+    unsafe { buf.advance_mut(p) };
+}
+
+struct QueryExtensionReply {
+    sequence_number: u16,
+    reply_length: u32,
+    present: bool,
+    major_opcode: u8,
+    first_event: u8,
+    first_error: u8,
+}
+
+fn list_extensions(buf: &mut impl BufMut) {
+    buf.put_u8(Opcodes::ListExtensions as u8); // opcode
+    buf.put_u8(0); // padding
+    buf.put_u16_le(1); // request length
+}
+
 fn decode_event(event: Events, buf: &mut impl Buf) {
     if buf.remaining() < 31 {
         return;
@@ -467,7 +520,7 @@ impl IdGenerator {
         Self {
             last: 0,
             max: mask,
-            base: base,
+            base,
             inc: mask & (!mask + 1),
         }
     }
@@ -491,6 +544,90 @@ impl Iterator for IdGenerator {
     }
 }
 
+#[repr(u8)]
+enum ShapeKind {
+    Bounding = 0,
+    Clip = 1,
+    Input = 2,
+}
+
+#[repr(u8)]
+enum ShapeOperations {
+    Set = 0,
+    Union = 1,
+    Intersect = 2,
+    Subtract = 3,
+    Invert = 4,
+}
+
+struct ShapeExtension {
+    major_opcode: u8,
+}
+
+impl ShapeExtension {
+    fn new(major_opcode: u8) -> Self {
+        Self { major_opcode }
+    }
+
+    fn query_version(&self, buf: &mut impl BufMut) {
+        buf.put_u8(self.major_opcode); // opcode
+        buf.put_u8(0); // shape opcode
+        buf.put_u16_le(1); // request length
+    }
+
+    fn rectangles(&self, buf: &mut impl BufMut, window_id: WindowId, x_offset: u16, y_offset: u16) {
+        buf.put_u8(self.major_opcode); // opcode
+        buf.put_u8(1); // shape opcode
+        buf.put_u16_le(0); // request length
+        buf.put_u8(ShapeOperations::Set as u8); // shape operation
+        buf.put_u8(ShapeKind::Clip as u8); // destination kind
+        buf.put_u8(0); // ordering
+        unsafe { buf.advance_mut(1) };
+        buf.put_u32_le(window_id);
+
+        buf.put_u16_le(x_offset);
+        buf.put_u16_le(y_offset);
+    }
+
+    fn mask(
+        &self,
+        buf: &mut impl BufMut,
+        window_id: WindowId,
+        x_offset: u16,
+        y_offset: u16,
+        pixmap_id: Option<PixmapId>,
+    ) {
+        buf.put_u8(self.major_opcode); // opcode
+        buf.put_u8(2); // shape opcode
+        buf.put_u16_le(5); // request length
+        buf.put_u8(ShapeOperations::Set as u8); // shape operation
+        buf.put_u8(ShapeKind::Clip as u8); // destination kind
+        unsafe { buf.advance_mut(2) };
+        buf.put_u32_le(window_id);
+
+        buf.put_u16_le(x_offset);
+        buf.put_u16_le(y_offset);
+
+        if let Some(pixmap_id) = pixmap_id {
+            buf.put_u32_le(pixmap_id); // source bitmap
+        } else {
+            buf.put_u32_le(0); // source bitmap
+        }
+    }
+
+    fn combine(&self) {}
+
+    fn offset(&self) {}
+
+    fn query_extends(&self) {}
+
+    fn select_input(&self) {}
+
+    fn input_selected(&self) {}
+
+    fn get_rectangles(&self) {}
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn error::Error>> {
     let mut stream = UnixStream::connect("/tmp/.X11-unix/X1").await?; // Xnest server
@@ -506,7 +643,6 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 
     let mut response = BytesMut::new();
     let n = stream.read_buf(&mut response).await?;
-    eprintln!("{} - {:?}", n, &response[..n]);
     let status_code = response.get_u8();
     match status_code {
         0 => panic!("failed"),
@@ -668,12 +804,13 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 
     let (mut read_stream, write_stream) = stream.into_split();
     let (tx, mut rx): (
-        tokio::sync::mpsc::Sender<(Opcodes, oneshot::Sender<i32>)>,
-        tokio::sync::mpsc::Receiver<(Opcodes, oneshot::Sender<i32>)>,
+        tokio::sync::mpsc::Sender<(Opcodes, oneshot::Sender<Bytes>)>,
+        tokio::sync::mpsc::Receiver<(Opcodes, oneshot::Sender<Bytes>)>,
     ) = mpsc::channel(1);
 
     let mut stream = write_stream;
     tokio::spawn(async move {
+        let mut response_buf = BytesMut::new();
         loop {
             // Every reply contains a 32-bit length field expressed in units
             // of four bytes. Every reply consists of 32 bytes followed by
@@ -681,7 +818,6 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
             // length field. Unused bytes within a reply are not guaranteed to
             // be zero. Every reply also contains the least significant 16
             // bits of the sequence number of the corresponding request.
-            let mut response_buf = BytesMut::new();
             let n = read_stream.read_buf(&mut response_buf).await;
             while response_buf.remaining() >= 32 {
                 let first_byte = response_buf.get_u8();
@@ -718,15 +854,13 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                         eprintln!("received reply: {:?}, opcode: {:?}", response_buf, opcode);
                         match opcode {
                             Opcodes::GetWindowAttributes => {
-                                let backing_store = response_buf.get_u8();
-                                let sequence_number = response_buf.get_u16_le();
-                                let reply_length = response_buf.get_u32_le();
-                                eprintln!("reply_length: {}", reply_length);
-                                response_buf.advance(36);
+                                one_tx.send(response_buf.split_to(43).freeze());
+                            }
+                            Opcodes::QueryExtension => {
+                                one_tx.send(response_buf.split_to(31).freeze());
                             }
                             _ => panic!("unknown opcode {:?}", opcode),
                         }
-                        one_tx.send(23);
                     }
                 } else if let Some(event) = Events::from_u8(first_byte) {
                     decode_event(event, &mut response_buf);
@@ -751,10 +885,33 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let (one_tx, one_rx) = oneshot::channel();
     tx.send((Opcodes::GetWindowAttributes, one_tx)).await?;
     stream.write_all_buf(&mut request_buf).await?;
-    let x: i32 = one_rx.await.unwrap();
+    let reply = WindowAttributesReply::from_bytes(&mut one_rx.await.unwrap());
+    eprintln!("window attributes reply: {:?}", reply);
 
     let gc_id = create_gc(&mut request_buf, &connection, window_id, &mut id_generator);
     stream.write_all_buf(&mut request_buf).await?;
+
+    request_buf.clear();
+    query_extension(&mut request_buf);
+    eprintln!("request buf: {:?}", &request_buf);
+    let (one_tx, one_rx) = oneshot::channel();
+    tx.send((Opcodes::QueryExtension, one_tx)).await?;
+    stream.write_all_buf(&mut request_buf).await?;
+    let mut query_extension_bytes: Bytes = one_rx.await.unwrap();
+    query_extension_bytes.advance(1);
+    let reply = QueryExtensionReply {
+        sequence_number: query_extension_bytes.get_u16_le(),
+        reply_length: query_extension_bytes.get_u32_le(),
+        present: query_extension_bytes.get_u8() != 0,
+        major_opcode: query_extension_bytes.get_u8(),
+        first_event: query_extension_bytes.get_u8(),
+        first_error: query_extension_bytes.get_u8(),
+    };
+
+    eprintln!(
+        "present: {}, major_opcode: {}, base_event: {}",
+        reply.present, reply.major_opcode, reply.first_event
+    );
 
     for i in 0..100 {
         eprintln!("{}", i);

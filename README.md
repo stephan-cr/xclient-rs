@@ -15,3 +15,24 @@ $ Xnest -retro -cc 5 :1
 - [XCB
   examples](https://www.x.org/releases/X11R7.5/doc/libxcb/tutorial/#gc),
   that might be used to understand how X11 works
+
+HOWTO
+-----
+
+- list extensions:
+
+```shell
+xdpyinfo -queryExtensions
+```
+
+TODO
+----
+
+- implement [X Nonrectangular Window Shape Extension
+  Protocol](https://www.x.org/releases/current/doc/xextproto/shape.html),
+  which sounds funny
+- check why it doesn't work with Xephyr
+
+  ```shell
+  Xephyr -retro :1
+  ```
