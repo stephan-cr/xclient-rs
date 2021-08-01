@@ -412,10 +412,9 @@ fn free_gc(buf: &mut impl BufMut, gc_id: GCId) {
     buf.put_u32_le(gc_id);
 }
 
-fn query_extension(buf: &mut impl BufMut) {
+fn query_extension(buf: &mut impl BufMut, extension_name: &[u8]) {
     buf.put_u8(Opcodes::QueryExtension as u8); // opcode
     buf.put_u8(0); // padding
-    let extension_name = b"SHAPE";
     let n = extension_name.len();
     let p = pad(n);
     buf.put_u16_le((2 + (n + p) / 4).try_into().unwrap()); // request length
@@ -425,6 +424,7 @@ fn query_extension(buf: &mut impl BufMut) {
     unsafe { buf.advance_mut(p) };
 }
 
+#[derive(Debug)]
 struct QueryExtensionReply {
     sequence_number: u16,
     reply_length: u32,
@@ -867,6 +867,8 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                 }
             }
         }
+
+        Ok::<(), u32>(())
     });
 
     let mut id_generator = IdGenerator::new(resource_id_base, resource_id_mask);
@@ -892,7 +894,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     stream.write_all_buf(&mut request_buf).await?;
 
     request_buf.clear();
-    query_extension(&mut request_buf);
+    query_extension(&mut request_buf, &b"SHAPE"[..]);
     eprintln!("request buf: {:?}", &request_buf);
     let (one_tx, one_rx) = oneshot::channel();
     tx.send((Opcodes::QueryExtension, one_tx)).await?;
@@ -912,6 +914,23 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
         "present: {}, major_opcode: {}, base_event: {}",
         reply.present, reply.major_opcode, reply.first_event
     );
+
+    request_buf.clear();
+    query_extension(&mut request_buf, &b"Generic Event Extension"[..]);
+    let (one_tx, one_rx) = oneshot::channel();
+    tx.send((Opcodes::QueryExtension, one_tx)).await?;
+    stream.write_all_buf(&mut request_buf).await?;
+    let mut query_extension_bytes: Bytes = one_rx.await.unwrap();
+    query_extension_bytes.advance(1);
+    let reply = QueryExtensionReply {
+        sequence_number: query_extension_bytes.get_u16_le(),
+        reply_length: query_extension_bytes.get_u32_le(),
+        present: query_extension_bytes.get_u8() != 0,
+        major_opcode: query_extension_bytes.get_u8(),
+        first_event: query_extension_bytes.get_u8(),
+        first_error: query_extension_bytes.get_u8(),
+    };
+    eprintln!("generic event extension: {:?}", reply);
 
     for i in 0..100 {
         eprintln!("{}", i);
