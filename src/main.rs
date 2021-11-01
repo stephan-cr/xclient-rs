@@ -533,9 +533,7 @@ impl Iterator for IdGenerator {
 
     fn next(&mut self) -> Option<Self::Item> {
         // naive implementation for now
-        //
-        // it should handle overflows in the future and should return
-        // None in this case
+
         if self.last == self.max {
             return None;
         }

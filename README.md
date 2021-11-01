@@ -22,7 +22,7 @@ Helpful snippets for development
   ```
 
   ```shell
-  $ Xnest -retro -cc 5 :1
+  Xnest -retro -cc 5 :1
   ```
 
 HOWTO
@@ -30,9 +30,9 @@ HOWTO
 
 - list extensions:
 
-```shell
-xdpyinfo -queryExtensions
-```
+    ```shell
+    xdpyinfo -queryExtensions
+    ```
 
 TODO
 ----
@@ -40,6 +40,5 @@ TODO
 - implement [X Nonrectangular Window Shape Extension
   Protocol](https://www.x.org/releases/current/doc/xextproto/shape.html),
   which sounds funny
-- check why it doesn't work with Xephyr
 - [DRI3](https://keithp.com/blogs/dri3_extension/)
 - Find other interesting extensions
