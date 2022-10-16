@@ -1,4 +1,5 @@
 #![warn(rust_2018_idioms)]
+#![warn(clippy::pedantic)]
 #![allow(unused_variables)]
 #![allow(dead_code)]
 
@@ -96,34 +97,34 @@ enum ErrorCode {
 #[derive(Copy, Clone, Debug)]
 #[repr(u32)]
 pub enum Event {
-    KeyPress = 0x00000001,
-    KeyRelease = 0x00000002,
-    ButtonPress = 0x00000004,
-    ButtonRelease = 0x00000008,
-    EnterWindow = 0x00000010,
-    LeaveWindow = 0x00000020,
-    PointerMotion = 0x00000040,
-    PointerMotionHint = 0x00000080,
-    Button1Motion = 0x00000100,
-    Button2Motion = 0x00000200,
-    Button3Motion = 0x00000400,
-    Button4Motion = 0x00000800,
-    Button5Motion = 0x00001000,
-    ButtonMotion = 0x00002000,
-    KeymapState = 0x00004000,
-    Exposure = 0x00008000,
-    VisibilityChange = 0x00010000,
-    StructureNotify = 0x00020000,
-    ResizeRedirect = 0x00040000,
-    SubstructureNotify = 0x00080000,
-    SubstructureRedirect = 0x00100000,
-    FocusChange = 0x00200000,
-    PropertyChange = 0x00400000,
-    ColormapChange = 0x00800000,
-    OwnerGrabButton = 0x01000000,
+    KeyPress = 0x0000_0001,
+    KeyRelease = 0x0000_0002,
+    ButtonPress = 0x0000_0004,
+    ButtonRelease = 0x0000_0008,
+    EnterWindow = 0x0000_0010,
+    LeaveWindow = 0x0000_0020,
+    PointerMotion = 0x0000_0040,
+    PointerMotionHint = 0x0000_0080,
+    Button1Motion = 0x0000_0100,
+    Button2Motion = 0x0000_0200,
+    Button3Motion = 0x0000_0400,
+    Button4Motion = 0x0000_0800,
+    Button5Motion = 0x0000_1000,
+    ButtonMotion = 0x0000_2000,
+    KeymapState = 0x0000_4000,
+    Exposure = 0x0000_8000,
+    VisibilityChange = 0x0001_0000,
+    StructureNotify = 0x0002_0000,
+    ResizeRedirect = 0x0004_0000,
+    SubstructureNotify = 0x0008_0000,
+    SubstructureRedirect = 0x0010_0000,
+    FocusChange = 0x0020_0000,
+    PropertyChange = 0x0040_0000,
+    ColormapChange = 0x0080_0000,
+    OwnerGrabButton = 0x0100_0000,
 }
 
-#[derive(Debug, num_derive::FromPrimitive)]
+#[derive(Copy, Clone, Debug, num_derive::FromPrimitive)]
 #[repr(u8)]
 enum Events {
     KeyPress = 2,
@@ -222,21 +223,21 @@ fn create_window_request(
 ) -> WindowId {
     #[repr(u32)]
     enum BitmaskValues {
-        BackgroundPixmap = 0x00000001,
-        BackgroundPixel = 0x00000002,
-        BorderPixmap = 0x00000004,
-        BorderPixel = 0x00000008,
-        BitGravity = 0x00000010,
-        WinGravity = 0x00000020,
-        BackingStore = 0x00000040,
-        BackingPlanes = 0x00000080,
-        BackingPixel = 0x00000100,
-        OverrideRedirect = 0x00000200,
-        SaveUnder = 0x00000400,
-        EventMask = 0x00000800,
-        DoNotPropagateMask = 0x00001000,
-        Colormap = 0x00002000,
-        Cursor = 0x00004000,
+        BackgroundPixmap = 0x0000_0001,
+        BackgroundPixel = 0x0000_0002,
+        BorderPixmap = 0x0000_0004,
+        BorderPixel = 0x0000_0008,
+        BitGravity = 0x0000_0010,
+        WinGravity = 0x0000_0020,
+        BackingStore = 0x0000_0040,
+        BackingPlanes = 0x0000_0080,
+        BackingPixel = 0x0000_0100,
+        OverrideRedirect = 0x0000_0200,
+        SaveUnder = 0x0000_0400,
+        EventMask = 0x0000_0800,
+        DoNotPropagateMask = 0x0000_1000,
+        Colormap = 0x0000_2000,
+        Cursor = 0x0000_4000,
     }
 
     buf.put_u8(Opcodes::CreateWindow as u8); // opcode
@@ -643,8 +644,8 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
 
     let display = matches
         .get_one::<String>("display")
-        .map(String::as_str)
-        .unwrap_or("1");
+        .map_or("1", String::as_str);
+
     let mut stream = UnixStream::connect(String::from("/tmp/.X11-unix/X") + display).await?; // Xnest server
     let mut connection_req = BytesMut::with_capacity(12);
     connection_req.put_u8(0x6c); // little endian byte order (LSB first)
@@ -768,7 +769,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
             number_depths_in_allowed_depths: response.get_u8(),
             allowed_depths: Vec::new(),
         });
-        let last_screen = &mut screen_roots.last_mut().unwrap();
+        let last_screen = &mut *screen_roots.last_mut().unwrap();
         for _allowed_depth in 0..(last_screen.number_depths_in_allowed_depths) {
             last_screen.allowed_depths.push(Depth {
                 depth: {
@@ -784,7 +785,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                 visuals: Vec::new(),
             });
 
-            let last_allowed_depth = &mut last_screen.allowed_depths.last_mut().unwrap();
+            let last_allowed_depth = &mut *last_screen.allowed_depths.last_mut().unwrap();
             for _visual in 0..(last_allowed_depth.number_visual_types) {
                 last_allowed_depth.visuals.push(VisualType {
                     visual_id: response.get_u32_le(),
