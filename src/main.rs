@@ -4,14 +4,13 @@
 
 use ascii::AsciiString;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use clap::{App, Arg};
+use clap::{crate_name, crate_version, value_parser, Arg, Command};
 use colored::Colorize;
 use enumflags2::{bitflags, make_bitflags, BitFlags};
 use num_traits::FromPrimitive;
 use std::convert::TryInto;
 use std::error;
 use std::iter::Iterator;
-use std::str::FromStr;
 use std::time::Duration;
 use std::vec::Vec;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -628,29 +627,24 @@ impl ShapeExtension {
     fn get_rectangles(&self) {}
 }
 
-fn is_u32(v: String) -> Result<(), String> {
-    if u32::from_str(v.as_str()).is_ok() {
-        Ok(())
-    } else {
-        Err(String::from("not a valid number"))
-    }
-}
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn error::Error>> {
-    let matches = App::new("xclient")
-        .version("0.1")
+    let matches = Command::new(crate_name!())
+        .version(crate_version!())
         .arg(
-            Arg::with_name("display")
+            Arg::new("display")
                 .help("display to use")
                 .long("display")
                 .value_name("DISPLAY")
-                .validator(is_u32)
+                .value_parser(value_parser!(u32))
                 .takes_value(true),
         )
         .get_matches();
 
-    let display = matches.value_of("display").unwrap_or("1");
+    let display = matches
+        .get_one::<String>("display")
+        .map(String::as_str)
+        .unwrap_or("1");
     let mut stream = UnixStream::connect(String::from("/tmp/.X11-unix/X") + display).await?; // Xnest server
     let mut connection_req = BytesMut::with_capacity(12);
     connection_req.put_u8(0x6c); // little endian byte order (LSB first)
