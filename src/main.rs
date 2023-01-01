@@ -393,7 +393,7 @@ fn create_gc(
 ) -> GCId {
     buf.put_u8(Opcodes::CreateGC as u8); // opcode
     buf.put_u8(0); // padding
-    buf.put_u16_le(4 + 0); // request length
+    buf.put_u16_le(4); // request length
     let id = if let Some(id) = id_generator.next() {
         buf.put_u32_le(id); // cid
         id
@@ -421,7 +421,7 @@ fn query_extension(buf: &mut impl BufMut, extension_name: &[u8]) {
     let n = extension_name.len();
     let p = pad(n);
     buf.put_u16_le((2 + (n + p) / 4).try_into().unwrap()); // request length
-    buf.put_u16_le(n as u16); // length of name
+    buf.put_u16_le(n.try_into().unwrap()); // length of name
     buf.put_u16_le(0); // unused
     buf.put_slice(extension_name);
     unsafe { buf.advance_mut(p) };
@@ -448,7 +448,7 @@ fn decode_event(event: Events, buf: &mut impl Buf) {
         return;
     }
 
-    eprintln!("event: {:?}", event);
+    eprintln!("event: {event:?}");
 
     match event {
         Events::KeyPress | Events::KeyRelease => {
@@ -471,7 +471,7 @@ fn decode_event(event: Events, buf: &mut impl Buf) {
             // 1                                     unused
             buf.advance(24);
 
-            eprintln!("keycode: {}", detail);
+            eprintln!("keycode: {detail}");
         }
         Events::ButtonPress | Events::ButtonRelease => {
             let detail = buf.get_u8(); // keycode
@@ -480,7 +480,7 @@ fn decode_event(event: Events, buf: &mut impl Buf) {
 
             buf.advance(24);
 
-            eprintln!("button: {}", detail);
+            eprintln!("button: {detail}");
         }
         Events::EnterNotify | Events::LeaveNotify => {
             let detail = buf.get_u8();
@@ -811,7 +811,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     }
 
     let screen = screen_roots.first().unwrap();
-    eprintln!("{:?}", screen);
+    eprintln!("{screen:?}");
     eprintln!(
         "remaining from response: {} {} {}",
         response.remaining(),
@@ -842,9 +842,9 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                 if first_byte == 0 {
                     // Error
                     let raw_error_code = response_buf.get_u8();
-                    eprintln!("raw_error_code: {}", raw_error_code);
+                    eprintln!("raw_error_code: {raw_error_code}");
                     let error_code = ErrorCode::from_u8(raw_error_code).expect("valid error code");
-                    eprintln!("code field: {:?}", error_code);
+                    eprintln!("code field: {error_code:?}");
                     eprintln!("sequence number: {}", response_buf.get_u16_le());
                     match error_code {
                         ErrorCode::IDChoice | ErrorCode::Window => {
@@ -868,7 +868,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                     // Reply
                     let reply_info = rx.recv().await;
                     if let Some((opcode, one_tx)) = reply_info {
-                        eprintln!("received reply: {:?}, opcode: {:?}", response_buf, opcode);
+                        eprintln!("received reply: {response_buf:?}, opcode: {opcode:?}");
                         match opcode {
                             Opcodes::GetWindowAttributes => {
                                 one_tx.send(response_buf.split_to(43).freeze());
@@ -905,7 +905,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     tx.send((Opcodes::GetWindowAttributes, one_tx)).await?;
     stream.write_all_buf(&mut request_buf).await?;
     let reply = WindowAttributesReply::from_bytes(&mut one_rx.await.unwrap());
-    eprintln!("window attributes reply: {:?}", reply);
+    eprintln!("window attributes reply: {reply:?}");
 
     let gc_id = create_gc(&mut request_buf, &connection, window_id, &mut id_generator);
     stream.write_all_buf(&mut request_buf).await?;
@@ -947,10 +947,10 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
         first_event: query_extension_bytes.get_u8(),
         first_error: query_extension_bytes.get_u8(),
     };
-    eprintln!("generic event extension: {:?}", reply);
+    eprintln!("generic event extension: {reply:?}");
 
     for i in 0..100 {
-        eprintln!("{}", i);
+        eprintln!("{i}");
         sleep(Duration::from_millis(200)).await;
         request_buf.clear();
         configure_window(
