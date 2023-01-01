@@ -12,6 +12,7 @@ use num_traits::FromPrimitive;
 use std::convert::TryInto;
 use std::error;
 use std::iter::Iterator;
+use std::string::ToString;
 use std::time::Duration;
 use std::vec::Vec;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -643,10 +644,10 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
         .get_matches();
 
     let display = matches
-        .get_one::<String>("display")
-        .map_or("1", String::as_str);
+        .get_one::<u32>("display")
+        .map_or("1".to_string(), ToString::to_string);
 
-    let mut stream = UnixStream::connect(String::from("/tmp/.X11-unix/X") + display).await?; // Xnest server
+    let mut stream = UnixStream::connect(String::from("/tmp/.X11-unix/X") + &display).await?; // Xnest server
     let mut connection_req = BytesMut::with_capacity(12);
     connection_req.put_u8(0x6c); // little endian byte order (LSB first)
     connection_req.put_u8(0); // unused
