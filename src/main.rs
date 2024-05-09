@@ -502,12 +502,11 @@ fn decode_event(event: Events, buf: &mut impl Buf) {
             let key_code = buf.get_u8();
             let count = buf.get_u8();
             eprintln!(
-                "sequence_number: {}, request: {}, key_code: {}, count: {}",
-                sequence_number, request, key_code, count
+                "sequence_number: {sequence_number}, request: {request}, key_code: {key_code}, count: {count}",
             );
             buf.advance(25); // unused
         }
-        _ => panic!("unable to decode event yet: {:?}", event),
+        _ => panic!("unable to decode event yet: {event:?}"),
     }
 }
 
@@ -664,7 +663,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
         0 => panic!("failed"),
         1 => eprintln!("{}", "success".green()),
         2 => eprintln!("authenticate"),
-        x => panic!("unknown response status code: {}", x),
+        x => panic!("unknown response status code: {x}"),
     }
 
     response.advance(1); // unused pad
@@ -672,10 +671,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let protocol_major_version = response.get_u16_le();
     let protocol_minor_version = response.get_u16_le();
 
-    eprintln!(
-        "version major: {}, minor: {}",
-        protocol_major_version, protocol_minor_version
-    );
+    eprintln!("version major: {protocol_major_version}, minor: {protocol_minor_version}");
 
     let additional_data_len = response.get_u16_le();
     eprintln!("additional data len: {} [bytes]", additional_data_len * 4);
@@ -697,21 +693,18 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let number_screens_roots = response.get_u8() as usize;
     let number_formats = response.get_u8() as usize;
 
-    eprintln!(
-        "number of screens: {}, number of formats: {}",
-        number_screens_roots, number_formats
-    );
+    eprintln!("number of screens: {number_screens_roots}, number of formats: {number_formats}");
 
     let image_byte_order = match response.get_u8() {
         0 => ImageByteOrder::LSBFirst,
         1 => ImageByteOrder::MSBFirst,
-        x => panic!("unknown image byte order {}", x),
+        x => panic!("unknown image byte order {x}"),
     };
 
     let bitmap_format_bit_order = match response.get_u8() {
         0 => BitmapFormatBitOrder::LeastSignificant,
         1 => BitmapFormatBitOrder::MostSignificant,
-        x => panic!("unknown bitmap format bit order {}", x),
+        x => panic!("unknown bitmap format bit order {x}"),
     };
 
     let bitmap_format_scanline_unit = response.get_u8();
@@ -758,12 +751,12 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                 0 => BackingStore::Never,
                 1 => BackingStore::WhenMapped,
                 2 => BackingStore::Always,
-                other => panic!("unknown backing store code {}", other),
+                other => panic!("unknown backing store code {other}"),
             },
             save_unders: match response.get_u8() {
                 0 => false,
                 1 => true,
-                other => panic!("save unders must be either 0 or 1, but is {}", other),
+                other => panic!("save unders must be either 0 or 1, but is {other}"),
             },
             root_depth: response.get_u8(),
             number_depths_in_allowed_depths: response.get_u8(),
@@ -796,7 +789,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                         3 => Class::PseudoColor,
                         4 => Class::TrueColor,
                         5 => Class::DirectColor,
-                        other => panic!("unknown visual class {}", other),
+                        other => panic!("unknown visual class {other}"),
                     },
                     bits_per_rgb_value: response.get_u8(),
                     colormap_entries: response.get_u16_le(),
@@ -875,7 +868,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                             Opcodes::QueryExtension => {
                                 one_tx.send(response_buf.split_to(31).freeze());
                             }
-                            _ => panic!("unknown opcode {:?}", opcode),
+                            _ => panic!("unknown opcode {opcode:?}"),
                         }
                     }
                 } else if let Some(event) = Events::from_u8(first_byte) {
@@ -890,8 +883,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let mut id_generator = IdGenerator::new(resource_id_base, resource_id_mask);
 
     let mut request_buf = BytesMut::new();
-    let window_id =
-        create_window_request(&mut request_buf, &connection, &screen, &mut id_generator);
+    let window_id = create_window_request(&mut request_buf, &connection, screen, &mut id_generator);
     stream.write_all_buf(&mut request_buf).await?;
 
     let mut request_buf = BytesMut::new();
