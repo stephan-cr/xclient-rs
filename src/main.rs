@@ -638,8 +638,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                 .help("display to use")
                 .long("display")
                 .value_name("DISPLAY")
-                .value_parser(value_parser!(u32))
-                .takes_value(true),
+                .value_parser(value_parser!(u32)),
         )
         .get_matches();
 
