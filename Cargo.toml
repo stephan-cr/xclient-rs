@@ -2,7 +2,7 @@
 name = "xclient"
 version = "0.1.0"
 authors = ["Stephan Creutz <stephan.cr@gmx.de>"]
-edition = "2018"
+edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
