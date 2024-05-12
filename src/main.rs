@@ -35,12 +35,22 @@ enum Opcodes {
     CirculateWindow = 13,
     GetGeometry = 14,
     QueryTree = 15,
+    SetInputFocus = 42,
+    GetInputFocus = 43,
+    QueryKeymap = 44,
+    OpenFont = 45,
+    CloseFont = 46,
+    QueryFont = 47,
+    ListFonts = 49,
+    ListFontsWithInfo = 50,
     CreatePixmap = 53,
     FreePixmap = 54,
     CreateGC = 55,
     ChangeGC = 56,
     CopyGC = 57,
     FreeGC = 60,
+    ImageText8 = 76,
+    ImageText16 = 77,
     QueryExtension = 98,
     ListExtensions = 99,
 }
@@ -153,6 +163,43 @@ enum Events {
     ColormapNotify = 32,
     ClientMessage = 33,
     MappingNotify = 34,
+}
+
+#[derive(Copy, Clone, Debug, num_derive::FromPrimitive)]
+#[repr(u8)]
+enum MappingNotifyRequest {
+    Modifier = 0,
+    Keyboard = 1,
+    Pointer = 2,
+}
+
+#[bitflags]
+#[derive(Copy, Clone, Debug)]
+#[repr(u32)]
+enum CreateGcBits {
+    Function = 0x1,
+    PlaneMask = 0x2,
+    Foreground = 0x4,
+    Background = 0x8,
+    LineWidth = 0x10,
+    LineStyle = 0x20,
+    CapStyle = 0x40,
+    JoinStyle = 0x80,
+    FillStyle = 0x100,
+    FillRule = 0x200,
+    Tile = 0x400,
+    Stipple = 0x800,
+    TileStippleXOrigin = 0x1000,
+    TileStippleYOrigin = 0x2000,
+    Font = 0x4000,
+    SubwindowMode = 0x8000,
+    GraphicsExposures = 0x10000,
+    ClipXOrigin = 0x20000,
+    ClipYOrigin = 0x40000,
+    ClipMask = 0x80000,
+    DashOffset = 0x100000,
+    Dashes = 0x200000,
+    ArcMode = 0x400000,
 }
 
 type WindowId = u32;
@@ -416,6 +463,20 @@ fn free_gc(buf: &mut impl BufMut, gc_id: GCId) {
     buf.put_u32_le(gc_id);
 }
 
+fn list_fonts(buf: &mut impl BufMut) -> () {
+    let pattern_length: u16 = 1;
+    let pad = pad(pattern_length as usize) as u16;
+    let request_length: u16 = 2 + (pattern_length + pad) / 4;
+
+    buf.put_u8(Opcodes::ListFonts as u8); // opcode
+    buf.put_u8(0); // padding
+    buf.put_u16_le(request_length); // request length
+    buf.put_u16_le(1000); // max-names
+    buf.put_u16_le(pattern_length); // length of pattern
+    buf.put_slice(&[b'*']); // pattern
+    unsafe { buf.advance_mut(pad as usize) };
+}
+
 fn query_extension(buf: &mut impl BufMut, extension_name: &[u8]) {
     buf.put_u8(Opcodes::QueryExtension as u8); // opcode
     buf.put_u8(0); // padding
@@ -442,6 +503,34 @@ fn list_extensions(buf: &mut impl BufMut) {
     buf.put_u8(Opcodes::ListExtensions as u8); // opcode
     buf.put_u8(0); // padding
     buf.put_u16_le(1); // request length
+}
+
+fn open_font(buf: &mut impl BufMut, id_generator: &mut impl Iterator<Item = u32>) -> u32 {
+    let font_name_length = 5;
+    let font_id = id_generator.next().unwrap();
+    buf.put_u8(Opcodes::OpenFont as u8); // opcode
+    buf.put_u8(0); // padding
+    buf.put_u16(3 + (font_name_length + pad(font_name_length as usize)) as u16 / 4); // request length
+    buf.put_u32(font_id); // font ID
+    buf.put_u16(font_name_length as u16); // length of name
+    buf.put_u16(0); // unused
+    buf.put_slice(b"fixed"); // name of font
+    unsafe { buf.advance_mut(pad(font_name_length as usize)) };
+
+    font_id
+}
+
+fn image_text_8(buf: &mut impl BufMut, window_id: u32, gc_id: u32, x: u16, y: u16) {
+    let text_name_length = 11;
+    buf.put_u8(Opcodes::ImageText8 as u8); // opcode
+    buf.put_u8(text_name_length as u8); // length of string
+    buf.put_u16(4 + (text_name_length + pad(text_name_length as usize)) as u16 / 4); // request length
+    buf.put_u32(window_id); // drawable
+    buf.put_u32(gc_id); // context
+    buf.put_u16(x); // x
+    buf.put_u16(y); // y
+    buf.put_slice(b"Hello World");
+    unsafe { buf.advance_mut(pad(text_name_length as usize)) };
 }
 
 fn decode_event(event: Events, buf: &mut impl Buf) {
