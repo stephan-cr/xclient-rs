@@ -275,7 +275,8 @@ fn create_window_request(
             ButtonPress |
             ButtonRelease |
             EnterWindow |
-            LeaveWindow})
+            LeaveWindow |
+            Exposure})
         .bits(),
     ); // event-mask
 
@@ -505,6 +506,17 @@ fn decode_event(event: Events, buf: &mut impl Buf) {
                 "sequence_number: {sequence_number}, request: {request}, key_code: {key_code}, count: {count}",
             );
             buf.advance(25); // unused
+        }
+        Events::Expose => {
+            buf.advance(1); // unused
+            let sequence_number = buf.get_u16_le();
+            let window = buf.get_u32_le();
+            let x = buf.get_u16_le();
+            let y = buf.get_u16_le();
+            let width = buf.get_u16_le();
+            let height = buf.get_u16_le();
+            buf.advance(16); // decode later
+            eprintln!("window: {window}, x: {x}, y: {y}, width: {width}, height: {height}");
         }
         _ => panic!("unable to decode event yet: {event:?}"),
     }
