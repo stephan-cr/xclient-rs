@@ -437,11 +437,13 @@ fn create_gc(
     buf: &mut impl BufMut,
     connection: &Connection,
     window_id: WindowId,
+    font_id: u32,
     id_generator: &mut impl Iterator<Item = u32>,
 ) -> GCId {
+    let number_of_flags_in_bitmask = 3;
     buf.put_u8(Opcodes::CreateGC as u8); // opcode
     buf.put_u8(0); // padding
-    buf.put_u16_le(4); // request length
+    buf.put_u16_le(4 + number_of_flags_in_bitmask); // request length
     let id = if let Some(id) = id_generator.next() {
         buf.put_u32_le(id); // cid
         id
@@ -449,9 +451,16 @@ fn create_gc(
         panic!("no more ids");
     };
     buf.put_u32_le(window_id); // drawable
-    buf.put_u32_le(0); // bitmask
+    buf.put_u32_le(
+        CreateGcBits::Foreground as u32
+            | CreateGcBits::Background as u32
+            | CreateGcBits::Font as u32,
+    ); // bitmask
 
     // values list
+    buf.put_u32_le(0xFF00FF00); // foreground
+    buf.put_u32_le(0xFF000000); // background
+    buf.put_u32_le(font_id); // font id
 
     id
 }
@@ -474,7 +483,8 @@ fn list_fonts(buf: &mut impl BufMut) -> () {
     buf.put_u16_le(1000); // max-names
     buf.put_u16_le(pattern_length); // length of pattern
     buf.put_slice(&[b'*']); // pattern
-    unsafe { buf.advance_mut(pad as usize) };
+
+    buf.put_bytes(0, pad as usize);
 }
 
 fn query_extension(buf: &mut impl BufMut, extension_name: &[u8]) {
@@ -486,7 +496,7 @@ fn query_extension(buf: &mut impl BufMut, extension_name: &[u8]) {
     buf.put_u16_le(n.try_into().unwrap()); // length of name
     buf.put_u16_le(0); // unused
     buf.put_slice(extension_name);
-    unsafe { buf.advance_mut(p) };
+    buf.put_bytes(0, p);
 }
 
 #[derive(Debug)]
@@ -510,12 +520,12 @@ fn open_font(buf: &mut impl BufMut, id_generator: &mut impl Iterator<Item = u32>
     let font_id = id_generator.next().unwrap();
     buf.put_u8(Opcodes::OpenFont as u8); // opcode
     buf.put_u8(0); // padding
-    buf.put_u16(3 + (font_name_length + pad(font_name_length as usize)) as u16 / 4); // request length
-    buf.put_u32(font_id); // font ID
-    buf.put_u16(font_name_length as u16); // length of name
-    buf.put_u16(0); // unused
+    buf.put_u16_le(3 + (font_name_length + pad(font_name_length as usize)) as u16 / 4); // request length
+    buf.put_u32_le(font_id); // font ID
+    buf.put_u16_le(font_name_length as u16); // length of name
+    buf.put_u16_le(0); // unused
     buf.put_slice(b"fixed"); // name of font
-    unsafe { buf.advance_mut(pad(font_name_length as usize)) };
+    buf.put_bytes(0, pad(font_name_length as usize));
 
     font_id
 }
@@ -524,21 +534,20 @@ fn image_text_8(buf: &mut impl BufMut, window_id: u32, gc_id: u32, x: u16, y: u1
     let text_name_length = 11;
     buf.put_u8(Opcodes::ImageText8 as u8); // opcode
     buf.put_u8(text_name_length as u8); // length of string
-    buf.put_u16(4 + (text_name_length + pad(text_name_length as usize)) as u16 / 4); // request length
-    buf.put_u32(window_id); // drawable
-    buf.put_u32(gc_id); // context
-    buf.put_u16(x); // x
-    buf.put_u16(y); // y
+    buf.put_u16_le(4 + (text_name_length + pad(text_name_length as usize)) as u16 / 4); // request length
+    buf.put_u32_le(window_id); // drawable
+    buf.put_u32_le(gc_id); // context
+    buf.put_u16_le(x); // x
+    buf.put_u16_le(y); // y
     buf.put_slice(b"Hello World");
     unsafe { buf.advance_mut(pad(text_name_length as usize)) };
 }
 
 fn decode_event(event: Events, buf: &mut impl Buf) {
+    eprintln!("event: {event:?}");
     if buf.remaining() < 31 {
         return;
     }
-
-    eprintln!("event: {event:?}");
 
     match event {
         Events::KeyPress | Events::KeyRelease => {
@@ -958,22 +967,44 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                     response_buf.advance(21); // 21 unused bytes
                     eprintln!("--");
                 } else if first_byte == 1 {
-                    // Reply
+                    // process replies
                     let reply_info = rx.recv().await;
                     if let Some((opcode, one_tx)) = reply_info {
                         eprintln!("received reply: {response_buf:?}, opcode: {opcode:?}");
                         match opcode {
                             Opcodes::GetWindowAttributes => {
-                                one_tx.send(response_buf.split_to(43).freeze());
+                                while response_buf.remaining() < 44 {
+                                    let _ = read_stream.read_buf(&mut response_buf).await;
+                                }
+                                let _ = one_tx.send(response_buf.split_to(43).freeze());
                             }
                             Opcodes::QueryExtension => {
-                                one_tx.send(response_buf.split_to(31).freeze());
+                                let _ = one_tx.send(response_buf.split_to(31).freeze());
+                            }
+                            Opcodes::ListFonts => {
+                                response_buf.advance(1); // ignore unused bytes
+                                let _ = response_buf.get_u16_le(); // sequence number
+                                let response_length = response_buf.get_u32_le() as usize;
+                                while response_buf.remaining() < (response_length * 4 + 24) {
+                                    let _ = read_stream
+                                        .read_buf(&mut response_buf)
+                                        .await
+                                        .map_err(|_| 32u32)?;
+                                }
+                                let _ = one_tx
+                                    .send(response_buf.split_to(response_length * 4 + 24).freeze());
+                            }
+                            Opcodes::OpenFont | Opcodes::ImageText8 => {
+                                eprintln!("HERE");
                             }
                             _ => panic!("unknown opcode {opcode:?}"),
                         }
                     }
                 } else if let Some(event) = Events::from_u8(first_byte) {
+                    // process events
                     decode_event(event, &mut response_buf);
+                } else {
+                    panic!("unknown first byte {first_byte}");
                 }
             }
         }
@@ -996,19 +1027,60 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let (one_tx, one_rx) = oneshot::channel();
     tx.send((Opcodes::GetWindowAttributes, one_tx)).await?;
     stream.write_all_buf(&mut request_buf).await?;
-    let reply = WindowAttributesReply::from_bytes(&mut one_rx.await.unwrap());
+    let reply = WindowAttributesReply::from_bytes(&mut one_rx.await?);
     eprintln!("window attributes reply: {reply:?}");
 
-    let gc_id = create_gc(&mut request_buf, &connection, window_id, &mut id_generator);
+    let mut request_buf = BytesMut::new();
+    list_fonts(&mut request_buf);
+    let (one_tx, one_rx) = oneshot::channel();
+    tx.send((Opcodes::ListFonts, one_tx)).await?;
+    stream.write_all_buf(&mut request_buf).await?;
+    let mut list_fonts_bytes: Bytes = one_rx.await?;
+
+    let mut number_of_names = list_fonts_bytes.get_u16_le();
+    list_fonts_bytes.advance(22); // unused bytes
+
+    while number_of_names > 0 {
+        let font_string_length = list_fonts_bytes.get_u8();
+        println!(
+            "{}",
+            AsciiString::from_ascii(
+                list_fonts_bytes
+                    .get(..(font_string_length as usize))
+                    .unwrap(),
+            )
+            .unwrap()
+        );
+
+        list_fonts_bytes.advance(font_string_length as usize);
+
+        number_of_names -= 1;
+    }
+
+    let mut request_buf = BytesMut::new();
+    let font_id = open_font(&mut request_buf, &mut id_generator);
+    stream.write_all_buf(&mut request_buf).await?;
+
+    let gc_id = create_gc(
+        &mut request_buf,
+        &connection,
+        screen.window,
+        font_id,
+        &mut id_generator,
+    );
+    stream.write_all_buf(&mut request_buf).await?;
+
+    let mut request_buf = BytesMut::new();
+    image_text_8(&mut request_buf, window_id, gc_id, 50, 50);
     stream.write_all_buf(&mut request_buf).await?;
 
     request_buf.clear();
+    let mut request_buf = BytesMut::new();
     query_extension(&mut request_buf, &b"SHAPE"[..]);
-    eprintln!("request buf: {:?}", &request_buf);
     let (one_tx, one_rx) = oneshot::channel();
     tx.send((Opcodes::QueryExtension, one_tx)).await?;
     stream.write_all_buf(&mut request_buf).await?;
-    let mut query_extension_bytes: Bytes = one_rx.await.unwrap();
+    let mut query_extension_bytes: Bytes = one_rx.await?;
     query_extension_bytes.advance(1);
     let reply = QueryExtensionReply {
         sequence_number: query_extension_bytes.get_u16_le(),
@@ -1029,7 +1101,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let (one_tx, one_rx) = oneshot::channel();
     tx.send((Opcodes::QueryExtension, one_tx)).await?;
     stream.write_all_buf(&mut request_buf).await?;
-    let mut query_extension_bytes: Bytes = one_rx.await.unwrap();
+    let mut query_extension_bytes: Bytes = one_rx.await?;
     query_extension_bytes.advance(1);
     let reply = QueryExtensionReply {
         sequence_number: query_extension_bytes.get_u16_le(),
