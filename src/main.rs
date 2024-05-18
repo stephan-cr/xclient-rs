@@ -978,6 +978,32 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                                 }
                                 let _ = one_tx.send(response_buf.split_to(43).freeze());
                             }
+                            Opcodes::ListExtensions => {
+                                let number_of_strings = response_buf.get_u8();
+                                let sequence_number = response_buf.get_u16_le();
+                                let response_length = response_buf.get_u32_le() as usize;
+                                // unused, we can safely do that,
+                                // because replies are at least 32
+                                // bytes long
+                                response_buf.advance(24);
+                                while response_buf.remaining() < (response_length * 4) {
+                                    let _ = read_stream.read_buf(&mut response_buf).await;
+                                }
+                                dbg!(&response_buf);
+
+                                let mut sum_bytes = 0;
+                                for string_nr in 0..number_of_strings {
+                                    let str_len = response_buf.get_u8() as usize;
+                                    let ascii_str = AsciiString::from_ascii(
+                                        response_buf.get(..str_len).unwrap(),
+                                    )
+                                    .unwrap();
+                                    response_buf.advance(str_len);
+                                    println!("{ascii_str}");
+                                    sum_bytes += 1 + str_len;
+                                }
+                                let _ = one_tx.send(response_buf.split_to(pad(sum_bytes)).freeze());
+                            }
                             Opcodes::QueryExtension => {
                                 let _ = one_tx.send(response_buf.split_to(31).freeze());
                             }
@@ -1075,6 +1101,13 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     stream.write_all_buf(&mut request_buf).await?;
 
     request_buf.clear();
+
+    list_extensions(&mut request_buf);
+    let (one_tx, one_rx) = oneshot::channel();
+    tx.send((Opcodes::ListExtensions, one_tx)).await?;
+    stream.write_all_buf(&mut request_buf).await?;
+    one_rx.await?;
+
     let mut request_buf = BytesMut::new();
     query_extension(&mut request_buf, &b"SHAPE"[..]);
     let (one_tx, one_rx) = oneshot::channel();
