@@ -1145,16 +1145,34 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     };
     eprintln!("generic event extension: {reply:?}");
 
-    for i in 0..100 {
+    query_extension(&mut request_buf, &b"XVideo"[..]);
+    let (one_tx, one_rx) = oneshot::channel();
+    tx.send((Opcodes::QueryExtension, one_tx)).await?;
+    stream.write_all_buf(&mut request_buf).await?;
+    let mut query_extension_bytes: Bytes = one_rx.await?;
+    query_extension_bytes.advance(1);
+    let reply = QueryExtensionReply {
+        sequence_number: query_extension_bytes.get_u16_le(),
+        reply_length: query_extension_bytes.get_u32_le(),
+        present: query_extension_bytes.get_u8() != 0,
+        major_opcode: query_extension_bytes.get_u8(),
+        first_event: query_extension_bytes.get_u8(),
+        first_error: query_extension_bytes.get_u8(),
+    };
+    eprintln!("generic event extension: {reply:?}");
+
+    for i in 0..100u16 {
         eprintln!("{i}");
         sleep(Duration::from_millis(200)).await;
-        configure_window(
-            &mut request_buf,
-            window_id,
-            &[ConfigureWindowCommands::X(5), ConfigureWindowCommands::Y(5)],
-            2 * i,
-            0,
-        );
+
+        // configure_window(
+        //     &mut request_buf,
+        //     window_id,
+        //     &[ConfigureWindowCommands::X(5), ConfigureWindowCommands::Y(5)],
+        //     2 * i,
+        //     0,
+        // );
+        // stream.write_all_buf(&mut request_buf).await?;
 
         image_text_8(&mut request_buf, window_id, gc_id, i * 5, i * 15);
         stream.write_all_buf(&mut request_buf).await?;
