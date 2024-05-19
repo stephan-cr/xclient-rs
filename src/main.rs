@@ -1041,14 +1041,13 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let mut id_generator = IdGenerator::new(resource_id_base, resource_id_mask);
 
     let mut request_buf = BytesMut::new();
+
     let window_id = create_window_request(&mut request_buf, &connection, screen, &mut id_generator);
     stream.write_all_buf(&mut request_buf).await?;
 
-    let mut request_buf = BytesMut::new();
     map_window_request(&mut request_buf, window_id);
     stream.write_all_buf(&mut request_buf).await?;
 
-    let mut request_buf = BytesMut::new();
     get_window_attributes_request(&mut request_buf, window_id);
     let (one_tx, one_rx) = oneshot::channel();
     tx.send((Opcodes::GetWindowAttributes, one_tx)).await?;
@@ -1056,7 +1055,6 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     let reply = WindowAttributesReply::from_bytes(&mut one_rx.await?);
     eprintln!("window attributes reply: {reply:?}");
 
-    let mut request_buf = BytesMut::new();
     list_fonts(&mut request_buf);
     let (one_tx, one_rx) = oneshot::channel();
     tx.send((Opcodes::ListFonts, one_tx)).await?;
@@ -1083,7 +1081,6 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
         number_of_names -= 1;
     }
 
-    let mut request_buf = BytesMut::new();
     let font_id = open_font(&mut request_buf, &mut id_generator);
     stream.write_all_buf(&mut request_buf).await?;
 
@@ -1096,11 +1093,8 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     );
     stream.write_all_buf(&mut request_buf).await?;
 
-    let mut request_buf = BytesMut::new();
     image_text_8(&mut request_buf, window_id, gc_id, 50, 50);
     stream.write_all_buf(&mut request_buf).await?;
-
-    request_buf.clear();
 
     list_extensions(&mut request_buf);
     let (one_tx, one_rx) = oneshot::channel();
@@ -1108,7 +1102,6 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     stream.write_all_buf(&mut request_buf).await?;
     one_rx.await?;
 
-    let mut request_buf = BytesMut::new();
     query_extension(&mut request_buf, &b"SHAPE"[..]);
     let (one_tx, one_rx) = oneshot::channel();
     tx.send((Opcodes::QueryExtension, one_tx)).await?;
@@ -1129,7 +1122,6 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
         reply.present, reply.major_opcode, reply.first_event
     );
 
-    request_buf.clear();
     query_extension(&mut request_buf, &b"Generic Event Extension"[..]);
     let (one_tx, one_rx) = oneshot::channel();
     tx.send((Opcodes::QueryExtension, one_tx)).await?;
@@ -1149,7 +1141,6 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     for i in 0..100 {
         eprintln!("{i}");
         sleep(Duration::from_millis(200)).await;
-        request_buf.clear();
         configure_window(
             &mut request_buf,
             window_id,
@@ -1163,11 +1154,12 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
     free_gc(&mut request_buf, gc_id);
     stream.write_all_buf(&mut request_buf).await?;
 
-    let mut request_buf = BytesMut::new();
+    close_font(&mut request_buf, font_id);
+    stream.write_all_buf(&mut request_buf).await?;
+
     unmap_window_request(&mut request_buf, window_id);
     stream.write_all_buf(&mut request_buf).await?;
 
-    let mut request_buf = BytesMut::new();
     destroy_window_request(&mut request_buf, window_id);
     stream.write_all_buf(&mut request_buf).await?;
 
