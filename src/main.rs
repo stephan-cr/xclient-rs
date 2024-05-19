@@ -472,7 +472,7 @@ fn free_gc(buf: &mut impl BufMut, gc_id: GCId) {
     buf.put_u32_le(gc_id);
 }
 
-fn list_fonts(buf: &mut impl BufMut) -> () {
+fn list_fonts(buf: &mut impl BufMut) {
     let pattern_length: u16 = 1;
     let pad = pad(pattern_length as usize) as u16;
     let request_length: u16 = 2 + (pattern_length + pad) / 4;
@@ -528,6 +528,13 @@ fn open_font(buf: &mut impl BufMut, id_generator: &mut impl Iterator<Item = u32>
     buf.put_bytes(0, pad(font_name_length as usize));
 
     font_id
+}
+
+fn close_font(buf: &mut impl BufMut, font_id: u32) {
+    buf.put_u8(Opcodes::CloseFont as u8);
+    buf.put_u8(0); // unused
+    buf.put_u16_le(2); // request length
+    buf.put_u32_le(font_id);
 }
 
 fn image_text_8(buf: &mut impl BufMut, window_id: u32, gc_id: u32, x: u16, y: u16) {
@@ -1148,6 +1155,8 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
             2 * i,
             0,
         );
+
+        image_text_8(&mut request_buf, window_id, gc_id, i * 5, i * 15);
         stream.write_all_buf(&mut request_buf).await?;
     }
 
