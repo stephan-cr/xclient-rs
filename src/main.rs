@@ -519,13 +519,13 @@ fn open_font(buf: &mut impl BufMut, id_generator: &mut impl Iterator<Item = u32>
     let font_name_length = 5;
     let font_id = id_generator.next().unwrap();
     buf.put_u8(Opcodes::OpenFont as u8); // opcode
-    buf.put_u8(0); // padding
-    buf.put_u16_le(3 + (font_name_length + pad(font_name_length as usize)) as u16 / 4); // request length
+    buf.put_u8(0); // unused
+    buf.put_u16_le(3 + (font_name_length + pad(font_name_length)) as u16 / 4); // request length
     buf.put_u32_le(font_id); // font ID
     buf.put_u16_le(font_name_length as u16); // length of name
     buf.put_u16_le(0); // unused
     buf.put_slice(b"fixed"); // name of font
-    buf.put_bytes(0, pad(font_name_length as usize));
+    buf.put_bytes(0, pad(font_name_length));
 
     font_id
 }
@@ -540,14 +540,14 @@ fn close_font(buf: &mut impl BufMut, font_id: u32) {
 fn image_text_8(buf: &mut impl BufMut, window_id: u32, gc_id: u32, x: u16, y: u16) {
     let text_name_length = 11;
     buf.put_u8(Opcodes::ImageText8 as u8); // opcode
-    buf.put_u8(text_name_length as u8); // length of string
-    buf.put_u16_le(4 + (text_name_length + pad(text_name_length as usize)) as u16 / 4); // request length
+    buf.put_u8(u8::try_from(text_name_length).expect("text name length < 256")); // length of string
+    buf.put_u16_le(4 + (text_name_length + pad(text_name_length)) as u16 / 4); // request length
     buf.put_u32_le(window_id); // drawable
     buf.put_u32_le(gc_id); // context
     buf.put_u16_le(x); // x
     buf.put_u16_le(y); // y
     buf.put_slice(b"Hello World");
-    unsafe { buf.advance_mut(pad(text_name_length as usize)) };
+    unsafe { buf.advance_mut(pad(text_name_length)) };
 }
 
 fn decode_event(event: Events, buf: &mut impl Buf) {
@@ -604,11 +604,11 @@ fn decode_event(event: Events, buf: &mut impl Buf) {
         Events::MappingNotify => {
             buf.advance(1); // unused
             let sequence_number = buf.get_u16_le();
-            let request = buf.get_u8();
+            let request = MappingNotifyRequest::from_u8(buf.get_u8());
             let key_code = buf.get_u8();
             let count = buf.get_u8();
             eprintln!(
-                "sequence_number: {sequence_number}, request: {request}, key_code: {key_code}, count: {count}",
+                "sequence_number: {sequence_number}, request: {request:?}, key_code: {key_code}, count: {count}",
             );
             buf.advance(25); // unused
         }
@@ -949,7 +949,7 @@ async fn main() -> Result<(), Box<dyn error::Error>> {
                 let first_byte = response_buf.get_u8();
 
                 if first_byte == 0 {
-                    // Error
+                    // process errors
                     let raw_error_code = response_buf.get_u8();
                     eprintln!("raw_error_code: {raw_error_code}");
                     let error_code = ErrorCode::from_u8(raw_error_code).expect("valid error code");
