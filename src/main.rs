@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::sleep;
 
 #[derive(Debug, num_derive::FromPrimitive)]
+#[non_exhaustive]
 #[repr(u8)]
 enum Opcodes {
     CreateWindow = 1,
@@ -197,9 +198,9 @@ enum CreateGcBits {
     ClipXOrigin = 0x20000,
     ClipYOrigin = 0x40000,
     ClipMask = 0x80000,
-    DashOffset = 0x100000,
-    Dashes = 0x200000,
-    ArcMode = 0x400000,
+    DashOffset = 0x10_0000,
+    Dashes = 0x20_0000,
+    ArcMode = 0x40_0000,
 }
 
 type WindowId = u32;
@@ -458,8 +459,8 @@ fn create_gc(
     ); // bitmask
 
     // values list
-    buf.put_u32_le(0xFF00FF00); // foreground
-    buf.put_u32_le(0xFF000000); // background
+    buf.put_u32_le(0xFF00_FF00); // foreground
+    buf.put_u32_le(0xFF00_0000); // background
     buf.put_u32_le(font_id); // font id
 
     id
