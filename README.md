@@ -34,13 +34,14 @@ HOWTO
     xdpyinfo -queryExtensions
     ```
 
-TODO
-----
+Extensions
+----------
 
 - implement [X Nonrectangular Window Shape Extension
   Protocol](https://www.x.org/releases/current/doc/xextproto/shape.html),
   which sounds funny
 - [DRI3](https://keithp.com/blogs/dri3_extension/)
+- [RandR](https://xorg.freedesktop.org/archive/current/doc/randrproto/randrproto.txt)
 - Find other interesting extensions
 
 License
